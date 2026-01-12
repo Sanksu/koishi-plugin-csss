@@ -1,5 +1,6 @@
 import { Context, Schema, h } from 'koishi'
-import { createCanvas } from 'canvas'
+import {} from 'koishi-plugin-gamedig'
+import {} from 'koishi-plugin-canvas'
 
 export const name = 'cs-server-status'
 
@@ -24,6 +25,9 @@ export interface Config {
   scheduleEndTime: string
   scheduleGroups: string[]
   scheduleUseImage: boolean
+  // 新增QQ适配器配置
+  qqAdapterName: string
+  useFullChannelId: boolean
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -60,7 +64,7 @@ export const Config: Schema<Config> = Schema.object({
     .description('是否显示密码保护信息'),
 
   generateImage: Schema.boolean()
-    .default(true)  // 修改为默认true，默认输出图片
+    .default(true)
     .description('是否生成图片横幅（影响cs和csss命令）'),
 
   imageWidth: Schema.number()
@@ -130,6 +134,15 @@ export const Config: Schema<Config> = Schema.object({
   scheduleUseImage: Schema.boolean()
     .default(true)
     .description('定时任务是否使用图片格式输出'),
+
+  // 新增QQ适配器配置
+  qqAdapterName: Schema.string()
+    .default('qq')
+    .description('QQ适配器名称（默认为"qq"，如果在QQ配置中指定了其他名称请修改）'),
+
+  useFullChannelId: Schema.boolean()
+    .default(true)
+    .description('是否使用完整的频道ID格式（推荐开启）'),
 })
 
 interface CacheEntry {
@@ -189,11 +202,30 @@ const utils = {
     
     return currentMinutes >= startMinutes && currentMinutes <= endMinutes
   },
+
+  // 新增：格式化群组ID
+  formatGroupId(groupId: string, adapterName: string, useFullChannelId: boolean): string {
+    if (useFullChannelId) {
+      return `${adapterName}:${groupId}`
+    }
+    return groupId
+  },
 }
 
 export function apply(ctx: Context, config: Config) {
   const cache = new Map<string, CacheEntry>()
   let scheduleTimer: NodeJS.Timeout = null
+
+  // 检查所需插件是否可用
+  if (!ctx.gamedig) {
+    console.error('koishi-plugin-gamedig 未安装或未启用')
+    return ctx.logger('cs-server-status').error('需要安装并启用 koishi-plugin-gamedig 插件')
+  }
+
+  if (!ctx.canvas) {
+    console.error('koishi-plugin-canvas 未安装或未启用')
+    return ctx.logger('cs-server-status').error('需要安装并启用 koishi-plugin-canvas 插件')
+  }
 
   // 定时任务执行函数
   async function executeScheduleTask() {
@@ -291,9 +323,12 @@ export function apply(ctx: Context, config: Config) {
       // 向配置的群组发送消息
       for (const groupId of config.scheduleGroups) {
         try {
-          // 使用 ctx.broadcast 向指定群组发送消息
-          // 注意：这里的 groupId 应该是 QQ 群号（字符串形式）
-          await ctx.broadcast([`onebot:${groupId}`], outputContent)
+          const formattedGroupId = utils.formatGroupId(groupId, config.qqAdapterName, config.useFullChannelId)
+          
+          // 通过QQ适配器发送消息
+          await ctx.broadcast([formattedGroupId], outputContent)
+          
+          console.log(`定时任务消息已发送到群组: ${formattedGroupId}`)
         } catch (error) {
           console.error(`定时任务发送消息到群组 ${groupId} 失败:`, error)
         }
@@ -341,15 +376,6 @@ export function apply(ctx: Context, config: Config) {
     }
   })
 
-  async function loadGamedig() {
-    try {
-      const gamedigModule = await import('gamedig')
-      return gamedigModule.default || gamedigModule.GameDig || gamedigModule
-    } catch (error) {
-      throw new Error(`无法加载 gamedig 模块：${error.message}\n请确保已安装 gamedig：npm install gamedig`)
-    }
-  }
-
   function parseAddress(input: string): { host: string, port: number } {
     let address = input.replace(/^(http|https|udp|tcp):\/\//, '')
 
@@ -385,12 +411,12 @@ export function apply(ctx: Context, config: Config) {
       }
     }
 
-    const Gamedig = await loadGamedig()
     let lastError: Error
 
     for (let i = 0; i <= config.retryCount; i++) {
       try {
-        const result = await Gamedig.query({
+        // 使用 ctx.gamedig 提供的查询功能
+        const result = await ctx.gamedig.query({
           type: 'csgo',
           host,
           port,
@@ -654,28 +680,29 @@ export function apply(ctx: Context, config: Config) {
     const width = config.imageWidth
     const height = calculateImageHeight(data)
 
-    const canvas = createCanvas(width, height)
-    const ctx = canvas.getContext('2d')
+    // 使用 ctx.canvas 创建画布 - 注意：createCanvas 返回 Promise
+    const canvas = await ctx.canvas.createCanvas(width, height)
+    const ctx2d = canvas.getContext('2d')
 
-    imageUtils.drawBackground(ctx, width, height)
+    imageUtils.drawBackground(ctx2d, width, height)
 
     const titleY = 80
-    imageUtils.drawTitle(ctx, '服务器状态', width / 2, titleY, config.fontSize * 2.0, config.fontFamily)
+    imageUtils.drawTitle(ctx2d, '服务器状态', width / 2, titleY, config.fontSize * 2.0, config.fontFamily)
 
     if (result.name) {
       const cleanName = utils.cleanName(result.name)
-      const fontSize = imageUtils.calculateServerNameFontSize(ctx, cleanName, width - 160, config.fontSize)
-      imageUtils.drawTitle(ctx, cleanName, width / 2, titleY + 50, fontSize, config.fontFamily, '#FFD700')
+      const fontSize = imageUtils.calculateServerNameFontSize(ctx2d, cleanName, width - 160, config.fontSize)
+      imageUtils.drawTitle(ctx2d, cleanName, width / 2, titleY + 50, fontSize, config.fontFamily, '#FFD700')
     }
 
-    imageUtils.drawDivider(ctx, 80, titleY + 80, width - 80, titleY + 80, '#FFD700', 3)
+    imageUtils.drawDivider(ctx2d, 80, titleY + 80, width - 80, titleY + 80, '#FFD700', 3)
 
     let y = titleY + 120
 
     if (result.map) {
-      imageUtils.drawText(ctx, `地图: ${result.map}`, 80, y)
+      imageUtils.drawText(ctx2d, `地图: ${result.map}`, 80, y)
     }
-    imageUtils.drawText(ctx, `IP: ${host}:${port}`, width - 80, y, { align: 'right', color: '#bbbbbb' })
+    imageUtils.drawText(ctx2d, `IP: ${host}:${port}`, width - 80, y, { align: 'right', color: '#bbbbbb' })
 
     y += 40
 
@@ -683,10 +710,10 @@ export function apply(ctx: Context, config: Config) {
     const botCount = result.bots?.length || 0
     const maxPlayers = result.maxplayers || 0
     const playerText = `人数: ${playerCount}/${maxPlayers}${botCount > 0 ? ` (${botCount} Bot)` : ''}`
-    imageUtils.drawText(ctx, playerText, 80, y, { color: utils.getPlayerColor(playerCount) })
+    imageUtils.drawText(ctx2d, playerText, 80, y, { color: utils.getPlayerColor(playerCount) })
 
     if (result.ping) {
-      imageUtils.drawText(ctx, `Ping: ${result.ping}ms`, width - 80, y, {
+      imageUtils.drawText(ctx2d, `Ping: ${result.ping}ms`, width - 80, y, {
         align: 'right',
         color: utils.getPingColor(result.ping)
       })
@@ -696,27 +723,27 @@ export function apply(ctx: Context, config: Config) {
 
     const playerParams = imageUtils.calculatePlayerListParams(playerCount)
 
-    imageUtils.drawText(ctx, '在线玩家', 80, y, { color: '#ffffff', bold: true, fontSize: config.fontSize * 1.2 })
+    imageUtils.drawText(ctx2d, '在线玩家', 80, y, { color: '#ffffff', bold: true, fontSize: config.fontSize * 1.2 })
     y += 40
 
-    imageUtils.drawDivider(ctx, 80, y - 15, width - 80, y - 15, '#555555', 1.5)
+    imageUtils.drawDivider(ctx2d, 80, y - 15, width - 80, y - 15, '#555555', 1.5)
 
     y += 25
-    const playerListResult = imageUtils.drawPlayerList(ctx, result.players || [], y, width, height, playerParams)
+    const playerListResult = imageUtils.drawPlayerList(ctx2d, result.players || [], y, width, height, playerParams)
     y = playerListResult.y
 
     y += 30
 
     const now = new Date()
-    imageUtils.drawText(ctx, `查询时间: ${now.toLocaleString('zh-CN')}`, 80, height - 20, {
+    imageUtils.drawText(ctx2d, `查询时间: ${now.toLocaleString('zh-CN')}`, 80, height - 20, {
       fontSize: config.fontSize * 0.8,
       color: '#666666'
     })
 
-    imageUtils.drawDivider(ctx, 8, 8, width - 8, 8, '#7D8B92', 4)
-    imageUtils.drawDivider(ctx, width - 8, 8, width - 8, height - 8, '#7D8B92', 4)
-    imageUtils.drawDivider(ctx, width - 8, height - 8, 8, height - 8, '#7D8B92', 4)
-    imageUtils.drawDivider(ctx, 8, height - 8, 8, 8, '#7D8B92', 4)
+    imageUtils.drawDivider(ctx2d, 8, 8, width - 8, 8, '#7D8B92', 4)
+    imageUtils.drawDivider(ctx2d, width - 8, 8, width - 8, height - 8, '#7D8B92', 4)
+    imageUtils.drawDivider(ctx2d, width - 8, height - 8, 8, height - 8, '#7D8B92', 4)
+    imageUtils.drawDivider(ctx2d, 8, height - 8, 8, 8, '#7D8B92', 4)
 
     return canvas.toBuffer('image/png')
   }
@@ -732,22 +759,23 @@ export function apply(ctx: Context, config: Config) {
     const height = baseHeight + (results.length * serverHeight)
     const width = 1200
     
-    const canvas = createCanvas(width, height)
-    const ctx = canvas.getContext('2d')
+    // 使用 ctx.canvas 创建画布 - 注意：createCanvas 返回 Promise
+    const canvas = await ctx.canvas.createCanvas(width, height)
+    const ctx2d = canvas.getContext('2d')
     
     // 绘制背景
-    imageUtils.drawBackground(ctx, width, height)
+    imageUtils.drawBackground(ctx2d, width, height)
     
     // 绘制标题
-    imageUtils.drawTitle(ctx, '服务器状态批量查询', width / 2, 100, config.fontSize * 2.0, config.fontFamily)
+    imageUtils.drawTitle(ctx2d, '服务器状态批量查询', width / 2, 100, config.fontSize * 2.0, config.fontFamily)
     
     // 绘制统计信息
     const now = new Date()
-    imageUtils.drawText(ctx, `查询时间: ${now.toLocaleString('zh-CN')}`, 80, 150)
-    imageUtils.drawText(ctx, `耗时: ${utils.formatTime(queryTime)}  成功: ${successful}/${results.length}`, width - 80, 150, { align: 'right' })
+    imageUtils.drawText(ctx2d, `查询时间: ${now.toLocaleString('zh-CN')}`, 80, 150)
+    imageUtils.drawText(ctx2d, `耗时: ${utils.formatTime(queryTime)}  成功: ${successful}/${results.length}`, width - 80, 150, { align: 'right' })
     
     // 绘制分隔线
-    imageUtils.drawDivider(ctx, 80, 165, width - 80, 165, '#FFD700', 3)
+    imageUtils.drawDivider(ctx2d, 80, 165, width - 80, 165, '#FFD700', 3)
     
     let y = 200
     
@@ -766,14 +794,14 @@ export function apply(ctx: Context, config: Config) {
           const botCount = serverData.bots?.length || 0
           
           // 服务器序号和名称
-          imageUtils.drawText(ctx, `${index + 1}. ${serverName}`, 80, y, { 
+          imageUtils.drawText(ctx2d, `${index + 1}. ${serverName}`, 80, y, { 
             color: '#ffffff', 
             bold: true,
             fontSize: config.fontSize * 1.1
           })
           
           // 服务器地址
-          imageUtils.drawText(ctx, server, 80, y + 30, {
+          imageUtils.drawText(ctx2d, server, 80, y + 30, {
             fontSize: config.fontSize * 0.8,
             color: '#aaaaaa'
           })
@@ -781,7 +809,7 @@ export function apply(ctx: Context, config: Config) {
           // 玩家数量
           const playerText = `${playerCount}/${maxPlayers}`
           const playerColor = playerCount > 0 ? '#4CAF50' : '#c03f36'
-          imageUtils.drawText(ctx, playerText, width - 80, y, { 
+          imageUtils.drawText(ctx2d, playerText, width - 80, y, { 
             align: 'right', 
             color: playerColor,
             bold: true
@@ -789,7 +817,7 @@ export function apply(ctx: Context, config: Config) {
           
           // 地图和延迟
           if (serverData.map) {
-            imageUtils.drawText(ctx, `地图: ${serverData.map}`, 80, y + 60, { 
+            imageUtils.drawText(ctx2d, `地图: ${serverData.map}`, 80, y + 60, { 
               fontSize: config.fontSize * 0.8,
               color: '#aaaaaa'
             })
@@ -797,7 +825,7 @@ export function apply(ctx: Context, config: Config) {
           
           if (serverData.ping) {
             const pingColor = utils.getPingColor(serverData.ping)
-            imageUtils.drawText(ctx, `延迟: ${serverData.ping}ms`, width - 80, y + 60, { 
+            imageUtils.drawText(ctx2d, `延迟: ${serverData.ping}ms`, width - 80, y + 60, { 
               align: 'right',
               fontSize: config.fontSize * 0.9,
               color: pingColor
@@ -806,27 +834,27 @@ export function apply(ctx: Context, config: Config) {
           
         } else {
           // 查询失败的信息
-          imageUtils.drawText(ctx, `${index + 1}. ${server}`, 80, y, { color: '#ffffff', bold: true })
-          imageUtils.drawText(ctx, `❌ 查询失败: ${error}`, 200, y + 35, { color: '#c03f36' })
+          imageUtils.drawText(ctx2d, `${index + 1}. ${server}`, 80, y, { color: '#ffffff', bold: true })
+          imageUtils.drawText(ctx2d, `❌ 查询失败: ${error}`, 200, y + 35, { color: '#c03f36' })
         }
       } else {
         // Promise rejected
-        imageUtils.drawText(ctx, `${index + 1}. ${server}`, 80, y, { color: '#ffffff', bold: true })
-        imageUtils.drawText(ctx, '❌ 查询失败', 200, y + 35, { color: '#c03f36' })
+        imageUtils.drawText(ctx2d, `${index + 1}. ${server}`, 80, y, { color: '#ffffff', bold: true })
+        imageUtils.drawText(ctx2d, '❌ 查询失败', 200, y + 35, { color: '#c03f36' })
       }
       
       // 绘制分隔线
       if (index < results.length - 1) {
-        imageUtils.drawDivider(ctx, 80, y + 70, width - 80, y + 70, '#555555', 1)
+        imageUtils.drawDivider(ctx2d, 80, y + 70, width - 80, y + 70, '#555555', 1)
       }
       y += 100
     })
     
     // 绘制边框
-    imageUtils.drawDivider(ctx, 8, 8, width - 8, 8, '#7D8B92', 4)
-    imageUtils.drawDivider(ctx, width - 8, 8, width - 8, height - 8, '#7D8B92', 4)
-    imageUtils.drawDivider(ctx, width - 8, height - 8, 8, height - 8, '#7D8B92', 4)
-    imageUtils.drawDivider(ctx, 8, height - 8, 8, 8, '#7D8B92', 4)
+    imageUtils.drawDivider(ctx2d, 8, 8, width - 8, 8, '#7D8B92', 4)
+    imageUtils.drawDivider(ctx2d, width - 8, 8, width - 8, height - 8, '#7D8B92', 4)
+    imageUtils.drawDivider(ctx2d, width - 8, height - 8, 8, height - 8, '#7D8B92', 4)
+    imageUtils.drawDivider(ctx2d, 8, height - 8, 8, 8, '#7D8B92', 4)
     
     return canvas.toBuffer('image/png')
   }
@@ -842,11 +870,16 @@ export function apply(ctx: Context, config: Config) {
     .option('removeGroup', '-r <groupId> 从定时任务移除群组', { type: String })
     .option('listGroups', '-l 列出定时任务群组', { type: Boolean, fallback: false })
     .option('run', '-R 立即执行一次定时任务', { type: Boolean, fallback: false })
+    .option('testQQ', '-q 测试QQ适配器连接', { type: Boolean, fallback: false })
     .action(async ({ session, options }) => {
       if (options.status) {
         const status = config.scheduleEnabled ? '✅ 已启用' : '❌ 已禁用'
         const nextRun = scheduleTimer ? '运行中' : '未运行'
         const groups = config.scheduleGroups.length
+        
+        // 检查QQ适配器
+        const qqBots = ctx.bots.filter(bot => bot.platform === config.qqAdapterName)
+        const qqStatus = qqBots.length > 0 ? `✅ 可用 (${qqBots.length}个)` : '❌ 不可用'
         
         return `📅 定时任务状态\n` +
                `状态: ${status}\n` +
@@ -855,7 +888,9 @@ export function apply(ctx: Context, config: Config) {
                `时间范围: ${config.scheduleStartTime} - ${config.scheduleEndTime}\n` +
                `输出格式: ${config.scheduleUseImage ? '图片' : '文本'}\n` +
                `监控服务器: ${config.serverList.length}个\n` +
-               `目标群组: ${groups}个\n\n` +
+               `目标群组: ${groups}个\n` +
+               `QQ适配器: ${qqStatus} (名称: ${config.qqAdapterName})\n` +
+               `群组ID格式: ${config.useFullChannelId ? '适配器:群号' : '群号'}\n\n` +
                `使用 cs.schedule -h 查看所有命令选项`
       }
 
@@ -881,12 +916,44 @@ export function apply(ctx: Context, config: Config) {
         return '✅ 已立即执行一次定时任务'
       }
 
+      if (options.testQQ) {
+        const qqBots = ctx.bots.filter(bot => bot.platform === config.qqAdapterName)
+        if (qqBots.length === 0) {
+          return `❌ 找不到 ${config.qqAdapterName} 适配器的机器人\n请确保已正确配置QQ适配器`
+        }
+        
+        let message = `✅ 找到 ${qqBots.length} 个 ${config.qqAdapterName} 适配器机器人:\n`
+        qqBots.forEach((bot, index) => {
+          message += `${index + 1}. ${bot.selfId} (在线: ${bot.status})\n`
+        })
+        
+        // 测试发送消息到当前会话
+        if (session) {
+          try {
+            await session.send('测试消息: QQ适配器连接正常 ✓')
+            message += '\n✅ 当前会话消息发送测试成功'
+          } catch (error) {
+            message += `\n❌ 当前会话消息发送失败: ${error.message}`
+          }
+        }
+        
+        return message
+      }
+
       if (options.addGroup) {
-        if (!config.scheduleGroups.includes(options.addGroup)) {
-          config.scheduleGroups.push(options.addGroup)
-          return `✅ 已添加群组 ${options.addGroup} 到定时任务`
+        // 检查群组ID格式
+        let groupId = options.addGroup.trim()
+        
+        // 如果启用了完整频道ID格式但用户没有提供适配器前缀，自动添加
+        if (config.useFullChannelId && !groupId.includes(':')) {
+          groupId = `${config.qqAdapterName}:${groupId}`
+        }
+        
+        if (!config.scheduleGroups.includes(groupId)) {
+          config.scheduleGroups.push(groupId)
+          return `✅ 已添加群组 ${groupId} 到定时任务\n当前列表: ${config.scheduleGroups.length} 个群组`
         } else {
-          return `❌ 群组 ${options.addGroup} 已在列表中`
+          return `❌ 群组 ${groupId} 已在列表中`
         }
       }
 
@@ -920,6 +987,7 @@ export function apply(ctx: Context, config: Config) {
              `-T, -stop        停止定时任务\n` +
              `-t, -test        测试定时任务\n` +
              `-R, -run         立即执行一次定时任务\n` +
+             `-q, -testQQ      测试QQ适配器连接\n` +
              `-a, -addGroup    添加群组到定时任务\n` +
              `-r, -removeGroup 从定时任务移除群组\n` +
              `-l, -listGroups  列出定时任务群组\n\n` +
@@ -927,7 +995,8 @@ export function apply(ctx: Context, config: Config) {
              `cs.schedule -s          # 查看状态\n` +
              `cs.schedule -S          # 启动定时任务\n` +
              `cs.schedule -a 123456   # 添加群组123456\n` +
-             `cs.schedule -t          # 测试执行`
+             `cs.schedule -t          # 测试执行\n` +
+             `cs.schedule -q          # 测试QQ适配器连接`
     })
 
   // 主命令 - cs [ip:端口] 查询服务器状态
@@ -972,9 +1041,9 @@ export function apply(ctx: Context, config: Config) {
         let errorMessage = `查询失败: ${error.message}\n\n`
 
         if (error.message.includes('无法加载 gamedig')) {
-          errorMessage += '请确保已安装 gamedig：\n'
-          errorMessage += '1. 在插件目录运行：npm install gamedig\n'
-          errorMessage += '2. 重启 Koishi'
+          errorMessage += '请确保已安装 koishi-plugin-gamedig：\n'
+          errorMessage += '1. 在插件市场搜索并安装 koishi-plugin-gamedig\n'
+          errorMessage += '2. 启用该插件后重启'
         } else if (error.message.includes('无效的地址格式')) {
           errorMessage += '地址格式应为: 地址:端口\n'
           errorMessage += '示例: 127.0.0.1:27015 或 edgebug.cn:27015\n'
@@ -995,24 +1064,36 @@ export function apply(ctx: Context, config: Config) {
   ctx.command('cs.status', '检查插件状态和配置')
     .action(async () => {
       try {
-        await loadGamedig()
-        const cacheSize = cache.size
-
+        // 检查插件依赖
+        const gamedigStatus = ctx.gamedig ? '✅ 可用' : '❌ 不可用'
         let canvasStatus = '❌ 不可用'
-        try {
-          createCanvas(1, 1)
-          canvasStatus = '✅ 可用'
-        } catch (error) {
-          canvasStatus = `❌ 不可用: ${error.message}`
+        
+        if (ctx.canvas) {
+          try {
+            // 测试 canvas 插件
+            const canvas = await ctx.canvas.createCanvas(1, 1)
+            const ctx2d = canvas.getContext('2d')
+            canvasStatus = '✅ 可用'
+          } catch (error) {
+            canvasStatus = `❌ 不可用: ${error.message}`
+          }
         }
+        
+        const cacheSize = cache.size
 
         const scheduleStatus = config.scheduleEnabled ? '✅ 已启用' : '❌ 已禁用'
         const scheduleTimerStatus = scheduleTimer ? '运行中' : '未运行'
 
+        // 检查QQ适配器
+        const qqBots = ctx.bots.filter(bot => bot.platform === config.qqAdapterName)
+        const qqStatus = qqBots.length > 0 ? `✅ 可用 (${qqBots.length}个)` : '❌ 不可用'
+
         return `✅ CS服务器查询插件状态\n` +
           `💾 缓存数量: ${cacheSize} 条\n` +
-          `🖼️ 图片生成: ${canvasStatus}\n` +
+          `🕹️ Gamedig插件: ${gamedigStatus}\n` +
+          `🖼️ Canvas插件: ${canvasStatus}\n` +
           `📅 定时任务: ${scheduleStatus} (${scheduleTimerStatus})\n` +
+          `🤖 QQ适配器: ${qqStatus} (名称: ${config.qqAdapterName})\n` +
           `⚙️ 配置参数:\n` +
           `   超时时间: ${config.timeout}ms\n` +
           `   缓存时间: ${config.cacheTime}ms\n` +
@@ -1023,12 +1104,13 @@ export function apply(ctx: Context, config: Config) {
           `   生成图片横幅: ${config.generateImage ? '是' : '否'}\n` +
           `   图片宽度: ${config.imageWidth}px\n` +
           `   图片最小高度: ${config.imageHeight}px\n` +
-          `   字体大小: ${config.fontSize}px\n\n` +
+          `   字体大小: ${config.fontSize}px\n` +
+          `   群组ID格式: ${config.useFullChannelId ? '适配器:群号' : '群号'}\n\n` +
           `📝 使用: cs [地址:端口]\n` +
           `📝 选项: -i 生成图片, -t 输出文本, -c 清除缓存\n` +
           `📅 定时任务: cs.schedule 查看定时任务管理`
       } catch (error: any) {
-        return `❌ 插件状态异常: ${error.message}\n请运行: npm install gamedig`
+        return `❌ 插件状态异常: ${error.message}\n请确保已安装并启用 koishi-plugin-gamedig 和 koishi-plugin-canvas 插件`
       }
     })
 
@@ -1054,11 +1136,12 @@ export function apply(ctx: Context, config: Config) {
         `定时自动向指定QQ群组发送服务器状态\n` +
         `配置: 插件配置面板中设置\n` +
         `管理: cs.schedule 命令\n` +
-        `群组ID: 填写QQ群号即可\n\n` +
+        `群组ID格式: ${config.useFullChannelId ? '适配器:群号 (如: qq:123456)' : '群号 (如: 123456)'}\n\n` +
         `💡 提示:\n` +
         `1. 如果不指定端口，默认使用27015\n` +
         `2. 只支持CS服务器查询\n` +
-        `3. 查询结果缓存${config.cacheTime}ms，使用 -c 清除缓存`
+        `3. 查询结果缓存${config.cacheTime}ms，使用 -c 清除缓存\n` +
+        `4. 需要安装 koishi-plugin-gamedig 和 koishi-plugin-canvas 插件`
     })
 
   // 批量查询服务器状态
@@ -1227,3 +1310,5 @@ export function apply(ctx: Context, config: Config) {
     stopScheduleTask()
   })
 }
+
+export const inject = ['canvas', 'gamedig']
