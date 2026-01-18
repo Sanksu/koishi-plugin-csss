@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-csss",
   "description": "Check the status of the CS server",
-  "version": "1.1.0",
+  "version": "1.2.1",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -14,6 +14,16 @@
     "koishi",
     "plugin"
   ],
+  "devDependencies": {
+    "koishi": "^4.18.7",
+    "koishi-plugin-canvas": "^0.2.2",
+    "koishi-plugin-gamedig": "^1.2.2"
+  },
+  "peerDependencies": {
+    "koishi": "^4.18.7",
+    "koishi-plugin-canvas": "^0.2.2",
+    "koishi-plugin-gamedig": "^1.2.2"
+  },
   "koishi": {
     "description": {
       "zh": "CS服务器状态查询，包括CS1.6/CSS/CSGO/CS2"
@@ -23,15 +33,6 @@
         "canvas",
         "gamedig"
       ]
-    },
-    "peerDependencies": {
-      "koishi": "^4.18.7",
-      "koishi-plugin-canvas": "^0.2.2",
-      "koishi-plugin-gamedig": "^1.2.2"
-    },
-    "devDependencies": {
-      "koishi-plugin-canvas": "^0.2.2",
-      "koishi-plugin-gamedig": "^1.2.2"
     }
   }
 }

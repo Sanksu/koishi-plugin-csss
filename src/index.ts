@@ -1,6 +1,6 @@
 import { Context, Schema, h } from 'koishi'
-import {} from 'koishi-plugin-gamedig'
-import {} from 'koishi-plugin-canvas'
+import { } from 'koishi-plugin-gamedig'
+import { } from 'koishi-plugin-canvas'
 
 export const name = 'cs-server-status'
 
@@ -86,7 +86,7 @@ export const Config: Schema<Config> = Schema.object({
     .description('字体大小'),
 
   fontFamily: Schema.string()
-    .default('Microsoft YaHei, sans-serif')
+    .default('"JetBrains Mono", monospace')
     .description('字体家族'),
 
   serverList: Schema.array(Schema.string())
@@ -96,7 +96,8 @@ export const Config: Schema<Config> = Schema.object({
       'edgebug.cn:27015',
       'edgebug.cn:27016',
       'edgebug.cn:27017',
-      'edgebug.cn:27018',      
+      'edgebug.cn:27018',
+      'edgebug.cn:27019',
     ]),
 
   batchTimeout: Schema.number()
@@ -105,7 +106,7 @@ export const Config: Schema<Config> = Schema.object({
     .default(15000)
     .description('批量查询总超时时间(毫秒)'),
 
-  // 新增定时任务配置
+  // 定时任务配置
   scheduleEnabled: Schema.boolean()
     .default(false)
     .description('是否启用定时自动查询功能'),
@@ -135,7 +136,7 @@ export const Config: Schema<Config> = Schema.object({
     .default(true)
     .description('定时任务是否使用图片格式输出'),
 
-  // 新增QQ适配器配置
+  // QQ适配器配置
   qqAdapterName: Schema.string()
     .default('qq')
     .description('QQ适配器名称（默认为"qq"，如果在QQ配置中指定了其他名称请修改）'),
@@ -150,11 +151,36 @@ interface CacheEntry {
   data: any
 }
 
+// 颜色和样式常量
+const COLORS = {
+  background: 'rgba(28,28,31,0.80)',
+  text: 'rgb(113, 113, 122)',
+  textLight: '#aaaaaa',
+  textLighter: '#dddddd',
+  textWhite: '#ffffff',
+  border: '#2e2e33',
+  accent: '#fbbf24',
+  success: '#4CAF50',
+  warning: '#FFC107',
+  error: '#c03f36',
+  pingGreen: '#4CAF50',
+  pingYellow: '#FFC107',
+  pingOrange: '#FF9800',
+  pingRed: '#c03f36',
+  playerOnline: '#4CAF50',
+  playerOffline: '#c03f36',
+  title: '#71717a',
+  highlight: '#fbbf24',
+  divider: '#555555',
+  timestamp: '#666666',
+  gold: '#FFD700',
+  playerName: 'rgb(252, 248, 222)',
+}
+
 // 工具函数集合
 const utils = {
   formatPing(ping: number): string {
     if (!ping || ping < 0) return '未知'
-
     if (ping < 50) return `🟢 ${ping}ms`
     if (ping < 100) return `🟡 ${ping}ms`
     if (ping < 200) return `🟠 ${ping}ms`
@@ -170,40 +196,36 @@ const utils = {
   },
 
   getPingColor(ping: number): string {
-    if (ping < 50) return '#4CAF50'
-    if (ping < 100) return '#FFC107'
-    if (ping < 200) return '#FF9800'
-    return '#c03f36'
+    if (ping < 50) return COLORS.pingGreen
+    if (ping < 100) return COLORS.pingYellow
+    if (ping < 200) return COLORS.pingOrange
+    return COLORS.pingRed
   },
 
   getPlayerColor(count: number): string {
-    return count > 0 ? '#4CAF50' : '#c03f36'
+    return count > 0 ? COLORS.playerOnline : COLORS.playerOffline
   },
-  
-  // 新增：格式化时间
+
   formatTime(ms: number): string {
     if (ms < 1000) return `${ms}ms`
     if (ms < 60000) return `${(ms / 1000).toFixed(1)}秒`
     return `${(ms / 1000).toFixed(0)}秒`
   },
 
-  // 新增：解析时间字符串为分钟数
   parseTimeToMinutes(timeStr: string): number {
     const [hours, minutes] = timeStr.split(':').map(Number)
     return hours * 60 + minutes
   },
 
-  // 新增：检查当前时间是否在定时任务时间范围内
   isWithinScheduleTime(startTime: string, endTime: string): boolean {
     const now = new Date()
     const currentMinutes = now.getHours() * 60 + now.getMinutes()
     const startMinutes = this.parseTimeToMinutes(startTime)
     const endMinutes = this.parseTimeToMinutes(endTime)
-    
+
     return currentMinutes >= startMinutes && currentMinutes <= endMinutes
   },
 
-  // 新增：格式化群组ID
   formatGroupId(groupId: string, adapterName: string, useFullChannelId: boolean): string {
     if (useFullChannelId) {
       return `${adapterName}:${groupId}`
@@ -227,53 +249,92 @@ export function apply(ctx: Context, config: Config) {
     return ctx.logger('cs-server-status').error('需要安装并启用 koishi-plugin-canvas 插件')
   }
 
+  // 通用查询结果处理函数
+  async function queryServers(serversToQuery: string[]) {
+    const startTime = Date.now()
+    const results = await Promise.allSettled(
+      serversToQuery.map(async (server, index) => {
+        try {
+          const { host, port } = parseAddress(server)
+          const data = await queryServer(host, port)
+          return {
+            index: index + 1,
+            server,
+            success: true,
+            data
+          }
+        } catch (error: any) {
+          return {
+            index: index + 1,
+            server,
+            success: false,
+            error: error.message
+          }
+        }
+      })
+    )
+    const endTime = Date.now()
+    const queryTime = endTime - startTime
+
+    return { results, queryTime, serversToQuery }
+  }
+
+  // 通用文本表格生成函数
+  function generateTextTable(results: any[], serversToQuery: string[], queryTime: number, title: string = '批量查询结果'): string {
+    const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length
+    const failed = results.length - successful
+
+    let message = `📊 ${title} (${utils.formatTime(queryTime)})\n`
+    message += `✅ 成功: ${successful} 个 | ❌ 失败: ${failed} 个\n\n`
+    message += '序号 服务器名称    在线人数\n'
+    message += '──────────────────────────────\n'
+
+    results.forEach((result, index) => {
+      const serverInfo = serversToQuery[index]
+      if (result.status === 'fulfilled') {
+        const { success, data, error } = result.value
+
+        if (success && data) {
+          const { result: serverData } = data
+          const serverName = serverData.name ? utils.cleanName(serverData.name) : '未知'
+          const playerCount = serverData.players?.length || 0
+          const maxPlayers = serverData.maxplayers || 0
+
+          const truncatedName = utils.truncateText(serverName, 20)
+          const paddedName = truncatedName.padEnd(20, ' ')
+
+          message += `${(index + 1).toString().padStart(2, ' ')}  ${paddedName} ${playerCount}/${maxPlayers}\n`
+        } else {
+          message += `${(index + 1).toString().padStart(2, ' ')}  ${serverInfo} ❌ 查询失败: ${error}\n`
+        }
+      } else {
+        message += `${(index + 1).toString().padStart(2, ' ')}  ${serverInfo} ❌ 查询失败\n`
+      }
+    })
+
+    return message
+  }
+
   // 定时任务执行函数
   async function executeScheduleTask() {
     if (!config.scheduleEnabled || config.scheduleGroups.length === 0 || config.serverList.length === 0) {
       return
     }
 
-    // 检查是否在时间范围内
     if (!utils.isWithinScheduleTime(config.scheduleStartTime, config.scheduleEndTime)) {
       return
     }
 
     try {
-      const startTime = Date.now()
-      const results = await Promise.allSettled(
-        config.serverList.map(async (server, index) => {
-          try {
-            const { host, port } = parseAddress(server)
-            const data = await queryServer(host, port)
-            return {
-              index: index + 1,
-              server,
-              success: true,
-              data
-            }
-          } catch (error: any) {
-            return {
-              index: index + 1,
-              server,
-              success: false,
-              error: error.message
-            }
-          }
-        })
-      )
-
-      const endTime = Date.now()
-      const queryTime = endTime - startTime
+      const { results, queryTime, serversToQuery } = await queryServers(config.serverList)
       const now = new Date()
       const timeStr = now.toLocaleString('zh-CN')
 
-      // 生成输出内容
       let outputContent: string | h
 
       if (config.scheduleUseImage) {
-        // 生成图片
         try {
-          const imageBuffer = await generateBatchImage(results, config.serverList, queryTime)
+          const imageBuffer = await generateBatchImage(results, serversToQuery, queryTime)
           outputContent = h.image(imageBuffer, 'image/png')
         } catch (imageError) {
           console.error('定时任务生成图片失败:', imageError)
@@ -281,53 +342,16 @@ export function apply(ctx: Context, config: Config) {
         }
       }
 
-      // 如果图片生成失败或配置为文本格式，生成文本
       if (typeof outputContent === 'string' || !config.scheduleUseImage) {
-        const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length
-        const failed = results.length - successful
-        
-        let textMessage = `🕒 ${timeStr} 服务器状态更新 (耗时: ${utils.formatTime(queryTime)})\n`
-        textMessage += `✅ 成功: ${successful} 个 | ❌ 失败: ${failed} 个\n\n`
-
-        // 表格标题
-        textMessage += '序号 服务器名称    在线人数\n'
-        textMessage += '──────────────────────────────\n'
-
-        results.forEach((result, index) => {
-          const serverInfo = config.serverList[index]
-          if (result.status === 'fulfilled') {
-            const { success, data, error } = result.value
-
-            if (success && data) {
-              const { result: serverData } = data
-              const serverName = serverData.name ? utils.cleanName(serverData.name) : '未知'
-              const playerCount = serverData.players?.length || 0
-              const maxPlayers = serverData.maxplayers || 0
-
-              // 截断服务器名称，保持表格对齐
-              const truncatedName = utils.truncateText(serverName, 20)
-              const paddedName = truncatedName.padEnd(20, ' ')
-
-              textMessage += `${(index + 1).toString().padStart(2, ' ')}  ${paddedName} ${playerCount}/${maxPlayers}\n`
-            } else {
-              textMessage += `${(index + 1).toString().padStart(2, ' ')}  ${serverInfo} ❌ 查询失败: ${error}\n`
-            }
-          } else {
-            textMessage += `${(index + 1).toString().padStart(2, ' ')}  ${serverInfo} ❌ 查询失败\n`
-          }
-        })
-
-        outputContent = typeof outputContent === 'string' ? outputContent + textMessage : textMessage
+        const textMessage = generateTextTable(results, serversToQuery, queryTime, '服务器状态更新')
+        outputContent = `🕒 ${timeStr}\n\n${textMessage}`
       }
 
       // 向配置的群组发送消息
       for (const groupId of config.scheduleGroups) {
         try {
           const formattedGroupId = utils.formatGroupId(groupId, config.qqAdapterName, config.useFullChannelId)
-          
-          // 通过QQ适配器发送消息
           await ctx.broadcast([formattedGroupId], outputContent)
-          
           console.log(`定时任务消息已发送到群组: ${formattedGroupId}`)
         } catch (error) {
           console.error(`定时任务发送消息到群组 ${groupId} 失败:`, error)
@@ -346,14 +370,9 @@ export function apply(ctx: Context, config: Config) {
     }
 
     if (config.scheduleEnabled && config.scheduleInterval > 0) {
-      const intervalMs = config.scheduleInterval * 60 * 1000 // 转换为毫秒
-      
-      // 立即执行一次
+      const intervalMs = config.scheduleInterval * 60 * 1000
       executeScheduleTask()
-      
-      // 设置定时器
       scheduleTimer = setInterval(executeScheduleTask, intervalMs)
-      
       console.log(`定时任务已启动，间隔: ${config.scheduleInterval}分钟，时间范围: ${config.scheduleStartTime}-${config.scheduleEndTime}`)
     }
   }
@@ -415,7 +434,6 @@ export function apply(ctx: Context, config: Config) {
 
     for (let i = 0; i <= config.retryCount; i++) {
       try {
-        // 使用 ctx.gamedig 提供的查询功能
         const result = await ctx.gamedig.query({
           type: 'csgo',
           host,
@@ -487,17 +505,26 @@ export function apply(ctx: Context, config: Config) {
 
   // 图片生成相关的工具函数
   const imageUtils = {
-    calculateServerNameFontSize(ctx: any, name: string, maxWidth: number, baseFontSize: number): number {
+  calculateServerNameFontSize(ctx: any, name: string, maxWidth: number, baseFontSize: number): number {
+    try {
+      if (!ctx || typeof ctx.measureText !== 'function') {
+        console.warn('Canvas context not available, returning default font size')
+        return baseFontSize * 1.5
+      }
+      
       let fontSize = baseFontSize * 1.5
-
       while (fontSize > baseFontSize * 0.8) {
         ctx.font = `bold ${fontSize}px ${config.fontFamily}`
-        if (ctx.measureText(name).width <= maxWidth) break
+        const measurement = ctx.measureText(name)
+        if (measurement && measurement.width <= maxWidth) break
         fontSize -= 1
       }
-
       return fontSize
-    },
+    } catch (error) {
+      console.error('Error in calculateServerNameFontSize:', error)
+      return baseFontSize * 1.5
+    }
+  },
 
     calculatePlayerListParams(playerCount: number) {
       const shouldEnlarge = playerCount > 0 && playerCount < 10
@@ -510,22 +537,19 @@ export function apply(ctx: Context, config: Config) {
       }
     },
 
-    drawBackground(ctx: any, width: number, height: number) {
-      const gradient = ctx.createLinearGradient(0, 0, width, height)
-      gradient.addColorStop(0, '#1a1a2e')
-      gradient.addColorStop(1, '#16213e')
-      ctx.fillStyle = gradient
+    drawBackground(ctx: any, width: number, height: number, color: string = COLORS.background) {
+      ctx.fillStyle = color
       ctx.fillRect(0, 0, width, height)
     },
 
-    drawTitle(ctx: any, text: string, x: number, y: number, fontSize: number, fontFamily: string, color = '#ffffff') {
+    drawTitle(ctx: any, text: string, x: number, y: number, fontSize: number, fontFamily: string, color: string = COLORS.textWhite) {
       ctx.fillStyle = color
       ctx.font = `bold ${fontSize}px ${fontFamily}`
       ctx.textAlign = 'center'
       ctx.fillText(text, x, y)
     },
 
-    drawDivider(ctx: any, x1: number, y1: number, x2: number, y2: number, color: string, width = 2) {
+    drawDivider(ctx: any, x1: number, y1: number, x2: number, y2: number, color: string = COLORS.divider, width: number = 2) {
       ctx.strokeStyle = color
       ctx.lineWidth = width
       ctx.beginPath()
@@ -543,7 +567,7 @@ export function apply(ctx: Context, config: Config) {
       italic?: boolean
     } = {}) {
       const {
-        color = '#cccccc',
+        color = COLORS.text,
         fontSize = config.fontSize,
         fontFamily = config.fontFamily,
         align = 'left',
@@ -562,7 +586,7 @@ export function apply(ctx: Context, config: Config) {
       let y = startY
 
       if (players.length === 0) {
-        this.drawText(ctx, '服务器当前无在线玩家', 80, y, { italic: true, color: '#aaaaaa' })
+        this.drawText(ctx, '服务器当前无在线玩家', 80, y, { color: COLORS.textLight })
         return { y: y + 35, displayedCount: 0 }
       }
 
@@ -588,7 +612,7 @@ export function apply(ctx: Context, config: Config) {
           const name = utils.truncateText(utils.cleanName(player.name), params.nameMaxLength)
           this.drawText(ctx, name, leftColumnX, currentY, {
             fontSize: config.fontSize * params.fontSizeMultiplier,
-            color: '#dddddd'
+            color: COLORS.textLighter
           })
           currentY += params.rowHeight
           displayedCount++
@@ -599,7 +623,7 @@ export function apply(ctx: Context, config: Config) {
           const name = utils.truncateText(utils.cleanName(player.name), params.nameMaxLength)
           this.drawText(ctx, name, rightColumnX, currentY, {
             fontSize: config.fontSize * params.fontSizeMultiplier,
-            color: '#dddddd'
+            color: COLORS.textLighter
           })
           currentY += params.rowHeight
           displayedCount++
@@ -611,7 +635,7 @@ export function apply(ctx: Context, config: Config) {
         if (players.length > totalDisplayed) {
           this.drawText(ctx, `... 还有 ${players.length - totalDisplayed} 位玩家未显示`, leftColumnX, y, {
             fontSize: config.fontSize * 0.8,
-            color: '#aaaaaa',
+            color: COLORS.textLight,
             italic: true
           })
           y += 30
@@ -625,7 +649,7 @@ export function apply(ctx: Context, config: Config) {
           const name = utils.truncateText(utils.cleanName(player.name), params.nameMaxLength)
           this.drawText(ctx, name, 80, y, {
             fontSize: config.fontSize * params.fontSizeMultiplier,
-            color: '#dddddd'
+            color: COLORS.textLighter
           })
           y += params.rowHeight
         })
@@ -633,12 +657,34 @@ export function apply(ctx: Context, config: Config) {
         return { y, displayedCount: displayPlayers.length }
       }
     },
+
+    // 统一边框绘制函数
+    drawBorder(ctx: any, width: number, height: number) {
+      // 主边框
+      this.drawDivider(ctx, 1, 1, width - 1, 1, COLORS.border, 2)
+      this.drawDivider(ctx, width - 1, 1, width - 1, height - 1, COLORS.border, 2)
+      this.drawDivider(ctx, width - 1, height - 1, 1, height - 1, COLORS.border, 2)
+      this.drawDivider(ctx, 1, height - 1, 1, 1, COLORS.border, 2)
+
+      // 侧边装饰线
+      this.drawDivider(ctx, 5, 0.5 * height - 0.05 * height, 5, height - 0.5 * height + 0.05 * height, COLORS.border, 6)
+      this.drawDivider(ctx, width - 5, 0.5 * height - 0.05 * height, width - 5, height - 0.5 * height + 0.05 * height, COLORS.border, 6)
+
+      // 角标装饰
+      this.drawDivider(ctx, 2, 2, 0.025 * width, 2, COLORS.accent, 3)
+      this.drawDivider(ctx, 2, 2, 2, 0.025 * width, COLORS.accent, 3)
+      this.drawDivider(ctx, width - 2, 2, width - 2, 0.025 * width, COLORS.accent, 3)
+      this.drawDivider(ctx, width - 2, 2, width - 0.025 * width, 2, COLORS.accent, 3)
+      this.drawDivider(ctx, width - 2, height - 2, width - 2, height - 0.025 * width, COLORS.accent, 3)
+      this.drawDivider(ctx, width - 2, height - 2, width - 0.025 * width, height - 2, COLORS.accent, 3)
+      this.drawDivider(ctx, 2, height - 2, 0.025 * width, height - 2, COLORS.accent, 3)
+      this.drawDivider(ctx, 2, height - 2, 2, height - 0.025 * width, COLORS.accent, 3)
+    }
   }
 
   function calculateImageHeight(data: { game: string, result: any }): number {
     const { result } = data
     const playerCount = result.players?.length || 0
-
     const playerParams = imageUtils.calculatePlayerListParams(playerCount)
 
     let baseHeight = 280
@@ -680,29 +726,28 @@ export function apply(ctx: Context, config: Config) {
     const width = config.imageWidth
     const height = calculateImageHeight(data)
 
-    // 使用 ctx.canvas 创建画布 - 注意：createCanvas 返回 Promise
     const canvas = await ctx.canvas.createCanvas(width, height)
     const ctx2d = canvas.getContext('2d')
 
     imageUtils.drawBackground(ctx2d, width, height)
 
     const titleY = 80
-    imageUtils.drawTitle(ctx2d, '服务器状态', width / 2, titleY, config.fontSize * 2.0, config.fontFamily)
+    imageUtils.drawTitle(ctx2d, '[服务器状态查询]', width / 2, titleY, config.fontSize * 1.5, config.fontFamily, COLORS.title)
 
     if (result.name) {
       const cleanName = utils.cleanName(result.name)
       const fontSize = imageUtils.calculateServerNameFontSize(ctx2d, cleanName, width - 160, config.fontSize)
-      imageUtils.drawTitle(ctx2d, cleanName, width / 2, titleY + 50, fontSize, config.fontFamily, '#FFD700')
+      imageUtils.drawTitle(ctx2d, cleanName, width / 2, titleY + 50, fontSize * 1.8, config.fontFamily, COLORS.highlight)
     }
 
-    imageUtils.drawDivider(ctx2d, 80, titleY + 80, width - 80, titleY + 80, '#FFD700', 3)
+    imageUtils.drawDivider(ctx2d, 80, titleY + 80, width - 80, titleY + 80, COLORS.border, 2)
 
     let y = titleY + 120
 
     if (result.map) {
       imageUtils.drawText(ctx2d, `地图: ${result.map}`, 80, y)
     }
-    imageUtils.drawText(ctx2d, `IP: ${host}:${port}`, width - 80, y, { align: 'right', color: '#bbbbbb' })
+    imageUtils.drawText(ctx2d, `IP: ${host}:${port}`, width - 80, y, { align: 'right' })
 
     y += 40
 
@@ -723,10 +768,10 @@ export function apply(ctx: Context, config: Config) {
 
     const playerParams = imageUtils.calculatePlayerListParams(playerCount)
 
-    imageUtils.drawText(ctx2d, '在线玩家', 80, y, { color: '#ffffff', bold: true, fontSize: config.fontSize * 1.2 })
+    imageUtils.drawText(ctx2d, '在线玩家', 80, y, { color: COLORS.playerName, bold: true, fontSize: config.fontSize })
     y += 40
 
-    imageUtils.drawDivider(ctx2d, 80, y - 15, width - 80, y - 15, '#555555', 1.5)
+    imageUtils.drawDivider(ctx2d, 80, y - 15, width - 80, y - 15, COLORS.divider, 1.5)
 
     y += 25
     const playerListResult = imageUtils.drawPlayerList(ctx2d, result.players || [], y, width, height, playerParams)
@@ -737,13 +782,11 @@ export function apply(ctx: Context, config: Config) {
     const now = new Date()
     imageUtils.drawText(ctx2d, `查询时间: ${now.toLocaleString('zh-CN')}`, 80, height - 20, {
       fontSize: config.fontSize * 0.8,
-      color: '#666666'
+      color: COLORS.timestamp
     })
 
-    imageUtils.drawDivider(ctx2d, 8, 8, width - 8, 8, '#7D8B92', 4)
-    imageUtils.drawDivider(ctx2d, width - 8, 8, width - 8, height - 8, '#7D8B92', 4)
-    imageUtils.drawDivider(ctx2d, width - 8, height - 8, 8, height - 8, '#7D8B92', 4)
-    imageUtils.drawDivider(ctx2d, 8, height - 8, 8, 8, '#7D8B92', 4)
+    // 边框
+    imageUtils.drawBorder(ctx2d, width, height)
 
     return canvas.toBuffer('image/png')
   }
@@ -752,110 +795,105 @@ export function apply(ctx: Context, config: Config) {
   async function generateBatchImage(results: any[], serversToQuery: string[], queryTime: number): Promise<Buffer> {
     const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length
     const failed = results.length - successful
-    
+
     // 计算图片高度
     const baseHeight = 200
     const serverHeight = 100
+    const width = config.imageWidth
     const height = baseHeight + (results.length * serverHeight)
-    const width = 1200
-    
-    // 使用 ctx.canvas 创建画布 - 注意：createCanvas 返回 Promise
+
     const canvas = await ctx.canvas.createCanvas(width, height)
     const ctx2d = canvas.getContext('2d')
-    
+
     // 绘制背景
     imageUtils.drawBackground(ctx2d, width, height)
-    
+
     // 绘制标题
-    imageUtils.drawTitle(ctx2d, '服务器状态批量查询', width / 2, 100, config.fontSize * 2.0, config.fontFamily)
-    
+    imageUtils.drawTitle(ctx2d, '[服务器状态批量查询]', width / 2, 100, config.fontSize * 1.8, config.fontFamily, COLORS.title)
+
     // 绘制统计信息
     const now = new Date()
     imageUtils.drawText(ctx2d, `查询时间: ${now.toLocaleString('zh-CN')}`, 80, 150)
     imageUtils.drawText(ctx2d, `耗时: ${utils.formatTime(queryTime)}  成功: ${successful}/${results.length}`, width - 80, 150, { align: 'right' })
-    
+
     // 绘制分隔线
-    imageUtils.drawDivider(ctx2d, 80, 165, width - 80, 165, '#FFD700', 3)
-    
+    imageUtils.drawDivider(ctx2d, 80, 165, width - 80, 165, COLORS.gold, 2)
+
     let y = 200
-    
+
     // 绘制每个服务器的信息
     results.forEach((result, index) => {
       const server = serversToQuery[index]
-      
+
       if (result.status === 'fulfilled') {
         const { success, data, error } = result.value
-        
+
         if (success && data) {
           const serverData = data.result
           const serverName = serverData.name ? utils.cleanName(serverData.name) : '未知'
           const playerCount = serverData.players?.length || 0
           const maxPlayers = serverData.maxplayers || 0
-          const botCount = serverData.bots?.length || 0
-          
+
           // 服务器序号和名称
-          imageUtils.drawText(ctx2d, `${index + 1}. ${serverName}`, 80, y, { 
-            color: '#ffffff', 
+          imageUtils.drawText(ctx2d, `${index + 1}. ${serverName}`, 80, y, {
+            color: COLORS.textWhite,
             bold: true,
             fontSize: config.fontSize * 1.1
           })
-          
+
           // 服务器地址
           imageUtils.drawText(ctx2d, server, 80, y + 30, {
             fontSize: config.fontSize * 0.8,
-            color: '#aaaaaa'
+            color: COLORS.textLight
           })
-          
+
           // 玩家数量
           const playerText = `${playerCount}/${maxPlayers}`
-          const playerColor = playerCount > 0 ? '#4CAF50' : '#c03f36'
-          imageUtils.drawText(ctx2d, playerText, width - 80, y, { 
-            align: 'right', 
+          const playerColor = playerCount > 0 ? COLORS.success : COLORS.error
+          imageUtils.drawText(ctx2d, playerText, width - 80, y, {
+            align: 'right',
             color: playerColor,
             bold: true
           })
-          
+
           // 地图和延迟
           if (serverData.map) {
-            imageUtils.drawText(ctx2d, `地图: ${serverData.map}`, 80, y + 60, { 
+            imageUtils.drawText(ctx2d, `地图: ${serverData.map}`, 80, y + 60, {
               fontSize: config.fontSize * 0.8,
-              color: '#aaaaaa'
+              color: COLORS.textLight
             })
           }
-          
+
           if (serverData.ping) {
             const pingColor = utils.getPingColor(serverData.ping)
-            imageUtils.drawText(ctx2d, `延迟: ${serverData.ping}ms`, width - 80, y + 60, { 
+            imageUtils.drawText(ctx2d, `延迟: ${serverData.ping}ms`, width - 80, y + 60, {
               align: 'right',
               fontSize: config.fontSize * 0.9,
               color: pingColor
             })
           }
-          
+
         } else {
           // 查询失败的信息
-          imageUtils.drawText(ctx2d, `${index + 1}. ${server}`, 80, y, { color: '#ffffff', bold: true })
-          imageUtils.drawText(ctx2d, `❌ 查询失败: ${error}`, 200, y + 35, { color: '#c03f36' })
+          imageUtils.drawText(ctx2d, `${index + 1}. ${server}`, 80, y, { color: COLORS.textWhite, bold: true })
+          imageUtils.drawText(ctx2d, `❌ 查询失败: ${error}`, 200, y + 35, { color: COLORS.error })
         }
       } else {
         // Promise rejected
-        imageUtils.drawText(ctx2d, `${index + 1}. ${server}`, 80, y, { color: '#ffffff', bold: true })
-        imageUtils.drawText(ctx2d, '❌ 查询失败', 200, y + 35, { color: '#c03f36' })
+        imageUtils.drawText(ctx2d, `${index + 1}. ${server}`, 80, y, { color: COLORS.textWhite, bold: true })
+        imageUtils.drawText(ctx2d, '❌ 查询失败', 200, y + 35, { color: COLORS.error })
       }
-      
+
       // 绘制分隔线
       if (index < results.length - 1) {
-        imageUtils.drawDivider(ctx2d, 80, y + 70, width - 80, y + 70, '#555555', 1)
+        imageUtils.drawDivider(ctx2d, 80, y + 70, width - 80, y + 70, COLORS.divider, 1)
       }
       y += 100
     })
-    
-    // 绘制边框
-    imageUtils.drawDivider(ctx2d, 8, 8, width - 8, 8, '#7D8B92', 4)
-    imageUtils.drawDivider(ctx2d, width - 8, 8, width - 8, height - 8, '#7D8B92', 4)
-    imageUtils.drawDivider(ctx2d, width - 8, height - 8, 8, height - 8, '#7D8B92', 4)
-    imageUtils.drawDivider(ctx2d, 8, height - 8, 8, 8, '#7D8B92', 4)
-    
+
+    // 使用统一的边框绘制函数
+    imageUtils.drawBorder(ctx2d, width, height)
+
     return canvas.toBuffer('image/png')
   }
 
@@ -876,22 +914,22 @@ export function apply(ctx: Context, config: Config) {
         const status = config.scheduleEnabled ? '✅ 已启用' : '❌ 已禁用'
         const nextRun = scheduleTimer ? '运行中' : '未运行'
         const groups = config.scheduleGroups.length
-        
+
         // 检查QQ适配器
         const qqBots = ctx.bots.filter(bot => bot.platform === config.qqAdapterName)
         const qqStatus = qqBots.length > 0 ? `✅ 可用 (${qqBots.length}个)` : '❌ 不可用'
-        
+
         return `📅 定时任务状态\n` +
-               `状态: ${status}\n` +
-               `定时器: ${nextRun}\n` +
-               `间隔: ${config.scheduleInterval}分钟\n` +
-               `时间范围: ${config.scheduleStartTime} - ${config.scheduleEndTime}\n` +
-               `输出格式: ${config.scheduleUseImage ? '图片' : '文本'}\n` +
-               `监控服务器: ${config.serverList.length}个\n` +
-               `目标群组: ${groups}个\n` +
-               `QQ适配器: ${qqStatus} (名称: ${config.qqAdapterName})\n` +
-               `群组ID格式: ${config.useFullChannelId ? '适配器:群号' : '群号'}\n\n` +
-               `使用 cs.schedule -h 查看所有命令选项`
+          `状态: ${status}\n` +
+          `定时器: ${nextRun}\n` +
+          `间隔: ${config.scheduleInterval}分钟\n` +
+          `时间范围: ${config.scheduleStartTime} - ${config.scheduleEndTime}\n` +
+          `输出格式: ${config.scheduleUseImage ? '图片' : '文本'}\n` +
+          `监控服务器: ${config.serverList.length}个\n` +
+          `目标群组: ${groups}个\n` +
+          `QQ适配器: ${qqStatus} (名称: ${config.qqAdapterName})\n` +
+          `群组ID格式: ${config.useFullChannelId ? '适配器:群号' : '群号'}\n\n` +
+          `使用 cs.schedule -h 查看所有命令选项`
       }
 
       if (options.start) {
@@ -921,12 +959,12 @@ export function apply(ctx: Context, config: Config) {
         if (qqBots.length === 0) {
           return `❌ 找不到 ${config.qqAdapterName} 适配器的机器人\n请确保已正确配置QQ适配器`
         }
-        
+
         let message = `✅ 找到 ${qqBots.length} 个 ${config.qqAdapterName} 适配器机器人:\n`
         qqBots.forEach((bot, index) => {
           message += `${index + 1}. ${bot.selfId} (在线: ${bot.status})\n`
         })
-        
+
         // 测试发送消息到当前会话
         if (session) {
           try {
@@ -936,19 +974,19 @@ export function apply(ctx: Context, config: Config) {
             message += `\n❌ 当前会话消息发送失败: ${error.message}`
           }
         }
-        
+
         return message
       }
 
       if (options.addGroup) {
         // 检查群组ID格式
         let groupId = options.addGroup.trim()
-        
+
         // 如果启用了完整频道ID格式但用户没有提供适配器前缀，自动添加
         if (config.useFullChannelId && !groupId.includes(':')) {
           groupId = `${config.qqAdapterName}:${groupId}`
         }
-        
+
         if (!config.scheduleGroups.includes(groupId)) {
           config.scheduleGroups.push(groupId)
           return `✅ 已添加群组 ${groupId} 到定时任务\n当前列表: ${config.scheduleGroups.length} 个群组`
@@ -971,7 +1009,7 @@ export function apply(ctx: Context, config: Config) {
         if (config.scheduleGroups.length === 0) {
           return '📋 定时任务群组列表为空\n使用 cs.schedule -a <群组ID> 添加群组'
         }
-        
+
         let message = '📋 定时任务群组列表:\n'
         config.scheduleGroups.forEach((groupId, index) => {
           message += `${index + 1}. ${groupId}\n`
@@ -981,22 +1019,22 @@ export function apply(ctx: Context, config: Config) {
 
       // 如果没有指定选项，显示帮助信息
       return `📅 定时任务管理命令\n\n` +
-             `选项:\n` +
-             `-s, -status      查看定时任务状态\n` +
-             `-S, -start       启动定时任务\n` +
-             `-T, -stop        停止定时任务\n` +
-             `-t, -test        测试定时任务\n` +
-             `-R, -run         立即执行一次定时任务\n` +
-             `-q, -testQQ      测试QQ适配器连接\n` +
-             `-a, -addGroup    添加群组到定时任务\n` +
-             `-r, -removeGroup 从定时任务移除群组\n` +
-             `-l, -listGroups  列出定时任务群组\n\n` +
-             `示例:\n` +
-             `cs.schedule -s          # 查看状态\n` +
-             `cs.schedule -S          # 启动定时任务\n` +
-             `cs.schedule -a 123456   # 添加群组123456\n` +
-             `cs.schedule -t          # 测试执行\n` +
-             `cs.schedule -q          # 测试QQ适配器连接`
+        `选项:\n` +
+        `-s, -status      查看定时任务状态\n` +
+        `-S, -start       启动定时任务\n` +
+        `-T, -stop        停止定时任务\n` +
+        `-t, -test        测试定时任务\n` +
+        `-R, -run         立即执行一次定时任务\n` +
+        `-q, -testQQ      测试QQ适配器连接\n` +
+        `-a, -addGroup    添加群组到定时任务\n` +
+        `-r, -removeGroup 从定时任务移除群组\n` +
+        `-l, -listGroups  列出定时任务群组\n\n` +
+        `示例:\n` +
+        `cs.schedule -s          # 查看状态\n` +
+        `cs.schedule -S          # 启动定时任务\n` +
+        `cs.schedule -a 123456   # 添加群组123456\n` +
+        `cs.schedule -t          # 测试执行\n` +
+        `cs.schedule -q          # 测试QQ适配器连接`
     })
 
   // 主命令 - cs [ip:端口] 查询服务器状态
@@ -1019,20 +1057,20 @@ export function apply(ctx: Context, config: Config) {
       try {
         const { host, port } = parseAddress(address)
         const data = await queryServer(host, port)
-        
+
         // 确定是否生成图片：命令行选项优先 > 配置
         const shouldGenerateImage = options.image || (config.generateImage && !options.text)
-        
+
         if (shouldGenerateImage) {
           try {
             const imageBuffer = await generateServerImage(data, host, port)
             return h.image(imageBuffer, 'image/png')
           } catch (imageError) {
             console.error('生成图片失败:', imageError)
-            return `生成图片失败: ${imageError.message}\n将返回文本信息。`
+            return `生成图片失败: ${imageError.message}`
           }
         }
-        
+
         let message = formatServerInfo(data)
         message += '\n\n' + formatPlayers(data.result.players || [])
         return message
@@ -1067,7 +1105,7 @@ export function apply(ctx: Context, config: Config) {
         // 检查插件依赖
         const gamedigStatus = ctx.gamedig ? '✅ 可用' : '❌ 不可用'
         let canvasStatus = '❌ 不可用'
-        
+
         if (ctx.canvas) {
           try {
             // 测试 canvas 插件
@@ -1078,7 +1116,7 @@ export function apply(ctx: Context, config: Config) {
             canvasStatus = `❌ 不可用: ${error.message}`
           }
         }
-        
+
         const cacheSize = cache.size
 
         const scheduleStatus = config.scheduleEnabled ? '✅ 已启用' : '❌ 已禁用'
@@ -1102,7 +1140,6 @@ export function apply(ctx: Context, config: Config) {
           `   显示VAC状态: ${config.showVAC ? '是' : '否'}\n` +
           `   显示密码保护: ${config.showPassword ? '是' : '否'}\n` +
           `   生成图片横幅: ${config.generateImage ? '是' : '否'}\n` +
-          `   图片宽度: ${config.imageWidth}px\n` +
           `   图片最小高度: ${config.imageHeight}px\n` +
           `   字体大小: ${config.fontSize}px\n` +
           `   群组ID格式: ${config.useFullChannelId ? '适配器:群号' : '群号'}\n\n` +
@@ -1168,7 +1205,7 @@ export function apply(ctx: Context, config: Config) {
       // 添加服务器到列表
       if (options.add) {
         try {
-          parseAddress(options.add) // 验证地址格式
+          parseAddress(options.add)
           config.serverList.push(options.add)
           return `✅ 已添加服务器: ${options.add}\n当前列表: ${config.serverList.length} 个服务器`
         } catch (error) {
@@ -1197,10 +1234,8 @@ export function apply(ctx: Context, config: Config) {
       // 确定要查询的服务器列表
       let serversToQuery: string[]
       if (addresses.length > 0) {
-        // 使用命令行参数指定的服务器
         serversToQuery = addresses
       } else if (config.serverList.length > 0) {
-        // 使用配置的服务器列表
         serversToQuery = config.serverList
       } else {
         return '❌ 没有可查询的服务器\n请使用: csss -a <地址:端口> 添加服务器\n或使用: csss <地址1> <地址2> ... 临时查询'
@@ -1214,35 +1249,11 @@ export function apply(ctx: Context, config: Config) {
       }
 
       try {
-        const startTime = Date.now()
-        const results = await Promise.allSettled(
-          serversToQuery.map(async (server, index) => {
-            try {
-              const { host, port } = parseAddress(server)
-              const data = await queryServer(host, port)
-              return {
-                index: index + 1,
-                server,
-                success: true,
-                data
-              }
-            } catch (error: any) {
-              return {
-                index: index + 1,
-                server,
-                success: false,
-                error: error.message
-              }
-            }
-          })
-        )
-
-        const endTime = Date.now()
-        const queryTime = endTime - startTime
+        const { results, queryTime } = await queryServers(serversToQuery)
 
         // 确定是否生成图片：命令行选项优先 > 配置
         const shouldGenerateImage = options.image || (config.generateImage && !options.text)
-        
+
         if (shouldGenerateImage) {
           try {
             const imageBuffer = await generateBatchImage(results, serversToQuery, queryTime)
@@ -1253,42 +1264,7 @@ export function apply(ctx: Context, config: Config) {
           }
         }
 
-        // 统计成功和失败的数量
-        const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length
-        const failed = serversToQuery.length - successful
-
-        let message = `📊 批量查询结果 (${utils.formatTime(queryTime)})\n`
-        message += `✅ 成功: ${successful} 个 | ❌ 失败: ${failed} 个\n\n`
-
-        // 表格标题
-        message += '序号 服务器名称    在线人数\n'
-        message += '──────────────────────────────\n'
-
-        results.forEach((result, index) => {
-          const serverInfo = serversToQuery[index]
-          if (result.status === 'fulfilled') {
-            const { success, data, error } = result.value
-
-            if (success && data) {
-              const { result: serverData } = data
-              const serverName = serverData.name ? utils.cleanName(serverData.name) : '未知'
-              const playerCount = serverData.players?.length || 0
-              const maxPlayers = serverData.maxplayers || 0
-
-              // 截断服务器名称，保持表格对齐
-              const truncatedName = utils.truncateText(serverName, 20)
-              const paddedName = truncatedName.padEnd(20, ' ')
-
-              message += `${(index + 1).toString().padStart(2, ' ')}  ${paddedName} ${playerCount}/${maxPlayers}\n`
-            } else {
-              message += `${(index + 1).toString().padStart(2, ' ')}  ${serverInfo} ❌ 查询失败: ${error}\n`
-            }
-          } else {
-            message += `${(index + 1).toString().padStart(2, ' ')}  ${serverInfo} ❌ 查询失败\n`
-          }
-        })
-
-        // 添加详细信息选项
+        let message = generateTextTable(results, serversToQuery, queryTime, '批量查询结果')
         message += '\n📋 输入 `cs <序号>` 查看服务器详情'
         message += '\n📋 输入 `cs <服务器地址>` 查询单个服务器'
 
@@ -1311,4 +1287,4 @@ export function apply(ctx: Context, config: Config) {
   })
 }
 
-export const inject = ['canvas', 'gamedig']
+export const inject = ['canvas', 'gamedig', 'database']
