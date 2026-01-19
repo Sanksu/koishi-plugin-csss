@@ -2,7 +2,8 @@ import { Context, Schema, h } from 'koishi'
 import { } from 'koishi-plugin-gamedig'
 import { } from 'koishi-plugin-canvas'
 
-export const name = 'cs-server-status'
+export const name = 'csss'
+export const inject = ['canvas', 'gamedig', 'database']
 
 export interface Config {
   timeout: number
@@ -18,16 +19,6 @@ export interface Config {
   fontFamily: string
   serverList: string[]
   batchTimeout: number
-  // 新增定时任务配置
-  scheduleEnabled: boolean
-  scheduleInterval: number
-  scheduleStartTime: string
-  scheduleEndTime: string
-  scheduleGroups: string[]
-  scheduleUseImage: boolean
-  // 新增QQ适配器配置
-  qqAdapterName: string
-  useFullChannelId: boolean
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -87,11 +78,11 @@ export const Config: Schema<Config> = Schema.object({
 
   fontFamily: Schema.string()
     .default('"JetBrains Mono", monospace')
-    .description('字体家族'),
+    .description('字体'),
 
   serverList: Schema.array(Schema.string())
     .role('table')
-    .description('批量查询服务器列表（格式: 地址:端口，每行一个）')
+    .description('批量查询服务器列表（格式: [地址]:[端口]，每行一个）')
     .default([
       'edgebug.cn:27015',
       'edgebug.cn:27016',
@@ -105,45 +96,6 @@ export const Config: Schema<Config> = Schema.object({
     .max(60000)
     .default(15000)
     .description('批量查询总超时时间(毫秒)'),
-
-  // 定时任务配置
-  scheduleEnabled: Schema.boolean()
-    .default(false)
-    .description('是否启用定时自动查询功能'),
-
-  scheduleInterval: Schema.number()
-    .min(1)
-    .max(1440)
-    .default(5)
-    .description('定时查询间隔时间(分钟)'),
-
-  scheduleStartTime: Schema.string()
-    .pattern(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/)
-    .default('08:00')
-    .description('定时任务开始时间(24小时制，格式: HH:MM)'),
-
-  scheduleEndTime: Schema.string()
-    .pattern(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/)
-    .default('23:00')
-    .description('定时任务结束时间(24小时制，格式: HH:MM)'),
-
-  scheduleGroups: Schema.array(Schema.string())
-    .role('table')
-    .description('定时发送的群组ID列表（每行一个群组ID）')
-    .default([]),
-
-  scheduleUseImage: Schema.boolean()
-    .default(true)
-    .description('定时任务是否使用图片格式输出'),
-
-  // QQ适配器配置
-  qqAdapterName: Schema.string()
-    .default('qq')
-    .description('QQ适配器名称（默认为"qq"，如果在QQ配置中指定了其他名称请修改）'),
-
-  useFullChannelId: Schema.boolean()
-    .default(true)
-    .description('是否使用完整的频道ID格式（推荐开启）'),
 })
 
 interface CacheEntry {
@@ -211,32 +163,10 @@ const utils = {
     if (ms < 60000) return `${(ms / 1000).toFixed(1)}秒`
     return `${(ms / 1000).toFixed(0)}秒`
   },
-
-  parseTimeToMinutes(timeStr: string): number {
-    const [hours, minutes] = timeStr.split(':').map(Number)
-    return hours * 60 + minutes
-  },
-
-  isWithinScheduleTime(startTime: string, endTime: string): boolean {
-    const now = new Date()
-    const currentMinutes = now.getHours() * 60 + now.getMinutes()
-    const startMinutes = this.parseTimeToMinutes(startTime)
-    const endMinutes = this.parseTimeToMinutes(endTime)
-
-    return currentMinutes >= startMinutes && currentMinutes <= endMinutes
-  },
-
-  formatGroupId(groupId: string, adapterName: string, useFullChannelId: boolean): string {
-    if (useFullChannelId) {
-      return `${adapterName}:${groupId}`
-    }
-    return groupId
-  },
 }
 
 export function apply(ctx: Context, config: Config) {
   const cache = new Map<string, CacheEntry>()
-  let scheduleTimer: NodeJS.Timeout = null
 
   // 检查所需插件是否可用
   if (!ctx.gamedig) {
@@ -286,7 +216,7 @@ export function apply(ctx: Context, config: Config) {
 
     let message = `📊 ${title} (${utils.formatTime(queryTime)})\n`
     message += `✅ 成功: ${successful} 个 | ❌ 失败: ${failed} 个\n\n`
-    message += '序号 服务器名称    在线人数\n'
+    message += '序号 服务器名称       在线人数\n'
     message += '──────────────────────────────\n'
 
     results.forEach((result, index) => {
@@ -315,86 +245,6 @@ export function apply(ctx: Context, config: Config) {
     return message
   }
 
-  // 定时任务执行函数
-  async function executeScheduleTask() {
-    if (!config.scheduleEnabled || config.scheduleGroups.length === 0 || config.serverList.length === 0) {
-      return
-    }
-
-    if (!utils.isWithinScheduleTime(config.scheduleStartTime, config.scheduleEndTime)) {
-      return
-    }
-
-    try {
-      const { results, queryTime, serversToQuery } = await queryServers(config.serverList)
-      const now = new Date()
-      const timeStr = now.toLocaleString('zh-CN')
-
-      let outputContent: string | h
-
-      if (config.scheduleUseImage) {
-        try {
-          const imageBuffer = await generateBatchImage(results, serversToQuery, queryTime)
-          outputContent = h.image(imageBuffer, 'image/png')
-        } catch (imageError) {
-          console.error('定时任务生成图片失败:', imageError)
-          outputContent = `🕒 ${timeStr} 服务器状态更新\n生成图片失败，使用文本格式：\n\n`
-        }
-      }
-
-      if (typeof outputContent === 'string' || !config.scheduleUseImage) {
-        const textMessage = generateTextTable(results, serversToQuery, queryTime, '服务器状态更新')
-        outputContent = `🕒 ${timeStr}\n\n${textMessage}`
-      }
-
-      // 向配置的群组发送消息
-      for (const groupId of config.scheduleGroups) {
-        try {
-          const formattedGroupId = utils.formatGroupId(groupId, config.qqAdapterName, config.useFullChannelId)
-          await ctx.broadcast([formattedGroupId], outputContent)
-          console.log(`定时任务消息已发送到群组: ${formattedGroupId}`)
-        } catch (error) {
-          console.error(`定时任务发送消息到群组 ${groupId} 失败:`, error)
-        }
-      }
-
-    } catch (error) {
-      console.error('定时任务执行失败:', error)
-    }
-  }
-
-  // 启动定时任务
-  function startScheduleTask() {
-    if (scheduleTimer) {
-      clearInterval(scheduleTimer)
-    }
-
-    if (config.scheduleEnabled && config.scheduleInterval > 0) {
-      const intervalMs = config.scheduleInterval * 60 * 1000
-      executeScheduleTask()
-      scheduleTimer = setInterval(executeScheduleTask, intervalMs)
-      console.log(`定时任务已启动，间隔: ${config.scheduleInterval}分钟，时间范围: ${config.scheduleStartTime}-${config.scheduleEndTime}`)
-    }
-  }
-
-  // 停止定时任务
-  function stopScheduleTask() {
-    if (scheduleTimer) {
-      clearInterval(scheduleTimer)
-      scheduleTimer = null
-      console.log('定时任务已停止')
-    }
-  }
-
-  // 监听配置变化
-  ctx.on('config', () => {
-    if (config.scheduleEnabled) {
-      startScheduleTask()
-    } else {
-      stopScheduleTask()
-    }
-  })
-
   function parseAddress(input: string): { host: string, port: number } {
     let address = input.replace(/^(http|https|udp|tcp):\/\//, '')
 
@@ -416,7 +266,7 @@ export function apply(ctx: Context, config: Config) {
       return { host: parts[0], port: 27015 }
     }
 
-    throw new Error(`无效的地址格式: ${input}\n正确格式: 地址:端口 或 地址`)
+    throw new Error(`无效的地址格式: ${input}\n正确格式: [地址]:[端口] 或 [地址]`)
   }
 
   async function queryServer(host: string, port: number): Promise<{ game: string, result: any }> {
@@ -505,26 +355,26 @@ export function apply(ctx: Context, config: Config) {
 
   // 图片生成相关的工具函数
   const imageUtils = {
-  calculateServerNameFontSize(ctx: any, name: string, maxWidth: number, baseFontSize: number): number {
-    try {
-      if (!ctx || typeof ctx.measureText !== 'function') {
-        console.warn('Canvas context not available, returning default font size')
+    calculateServerNameFontSize(ctx: any, name: string, maxWidth: number, baseFontSize: number): number {
+      try {
+        if (!ctx || typeof ctx.measureText !== 'function') {
+          console.warn('Canvas context not available, returning default font size')
+          return baseFontSize * 1.5
+        }
+
+        let fontSize = baseFontSize * 1.5
+        while (fontSize > baseFontSize * 0.8) {
+          ctx.font = `bold ${fontSize}px ${config.fontFamily}`
+          const measurement = ctx.measureText(name)
+          if (measurement && measurement.width <= maxWidth) break
+          fontSize -= 1
+        }
+        return fontSize
+      } catch (error) {
+        console.error('Error in calculateServerNameFontSize:', error)
         return baseFontSize * 1.5
       }
-      
-      let fontSize = baseFontSize * 1.5
-      while (fontSize > baseFontSize * 0.8) {
-        ctx.font = `bold ${fontSize}px ${config.fontFamily}`
-        const measurement = ctx.measureText(name)
-        if (measurement && measurement.width <= maxWidth) break
-        fontSize -= 1
-      }
-      return fontSize
-    } catch (error) {
-      console.error('Error in calculateServerNameFontSize:', error)
-      return baseFontSize * 1.5
-    }
-  },
+    },
 
     calculatePlayerListParams(playerCount: number) {
       const shouldEnlarge = playerCount > 0 && playerCount < 10
@@ -586,7 +436,7 @@ export function apply(ctx: Context, config: Config) {
       let y = startY
 
       if (players.length === 0) {
-        this.drawText(ctx, '服务器当前无在线玩家', 80, y, { color: COLORS.textLight })
+        this.drawText(ctx, '服务器当前无玩家在线', 80, y, { color: COLORS.textLight })
         return { y: y + 35, displayedCount: 0 }
       }
 
@@ -658,7 +508,7 @@ export function apply(ctx: Context, config: Config) {
       }
     },
 
-    // 统一边框绘制函数
+    // 边框绘制函数
     drawBorder(ctx: any, width: number, height: number) {
       // 主边框
       this.drawDivider(ctx, 1, 1, width - 1, 1, COLORS.border, 2)
@@ -805,23 +655,23 @@ export function apply(ctx: Context, config: Config) {
     const canvas = await ctx.canvas.createCanvas(width, height)
     const ctx2d = canvas.getContext('2d')
 
-    // 绘制背景
+    // 背景
     imageUtils.drawBackground(ctx2d, width, height)
 
-    // 绘制标题
+    // 标题
     imageUtils.drawTitle(ctx2d, '[服务器状态批量查询]', width / 2, 100, config.fontSize * 1.8, config.fontFamily, COLORS.title)
 
-    // 绘制统计信息
+    // 统计信息
     const now = new Date()
     imageUtils.drawText(ctx2d, `查询时间: ${now.toLocaleString('zh-CN')}`, 80, 150)
     imageUtils.drawText(ctx2d, `耗时: ${utils.formatTime(queryTime)}  成功: ${successful}/${results.length}`, width - 80, 150, { align: 'right' })
 
-    // 绘制分隔线
+    // 分隔线
     imageUtils.drawDivider(ctx2d, 80, 165, width - 80, 165, COLORS.gold, 2)
 
     let y = 200
 
-    // 绘制每个服务器的信息
+    // 每个服务器的信息
     results.forEach((result, index) => {
       const server = serversToQuery[index]
 
@@ -874,170 +724,29 @@ export function apply(ctx: Context, config: Config) {
           }
 
         } else {
-          // 查询失败的信息
+          // 查询失败
           imageUtils.drawText(ctx2d, `${index + 1}. ${server}`, 80, y, { color: COLORS.textWhite, bold: true })
           imageUtils.drawText(ctx2d, `❌ 查询失败: ${error}`, 200, y + 35, { color: COLORS.error })
         }
       } else {
-        // Promise rejected
         imageUtils.drawText(ctx2d, `${index + 1}. ${server}`, 80, y, { color: COLORS.textWhite, bold: true })
         imageUtils.drawText(ctx2d, '❌ 查询失败', 200, y + 35, { color: COLORS.error })
       }
 
-      // 绘制分隔线
+      // 分隔线
       if (index < results.length - 1) {
         imageUtils.drawDivider(ctx2d, 80, y + 70, width - 80, y + 70, COLORS.divider, 1)
       }
       y += 100
     })
 
-    // 使用统一的边框绘制函数
+    // 绘制边框
     imageUtils.drawBorder(ctx2d, width, height)
 
     return canvas.toBuffer('image/png')
   }
 
-  // 新增：定时任务管理命令
-  ctx.command('cs.schedule', '定时任务管理')
-    .alias('定时任务')
-    .option('status', '-s 查看定时任务状态', { type: Boolean, fallback: false })
-    .option('start', '-S 启动定时任务', { type: Boolean, fallback: false })
-    .option('stop', '-T 停止定时任务', { type: Boolean, fallback: false })
-    .option('test', '-t 测试定时任务', { type: Boolean, fallback: false })
-    .option('addGroup', '-a <groupId> 添加群组到定时任务', { type: String })
-    .option('removeGroup', '-r <groupId> 从定时任务移除群组', { type: String })
-    .option('listGroups', '-l 列出定时任务群组', { type: Boolean, fallback: false })
-    .option('run', '-R 立即执行一次定时任务', { type: Boolean, fallback: false })
-    .option('testQQ', '-q 测试QQ适配器连接', { type: Boolean, fallback: false })
-    .action(async ({ session, options }) => {
-      if (options.status) {
-        const status = config.scheduleEnabled ? '✅ 已启用' : '❌ 已禁用'
-        const nextRun = scheduleTimer ? '运行中' : '未运行'
-        const groups = config.scheduleGroups.length
-
-        // 检查QQ适配器
-        const qqBots = ctx.bots.filter(bot => bot.platform === config.qqAdapterName)
-        const qqStatus = qqBots.length > 0 ? `✅ 可用 (${qqBots.length}个)` : '❌ 不可用'
-
-        return `📅 定时任务状态\n` +
-          `状态: ${status}\n` +
-          `定时器: ${nextRun}\n` +
-          `间隔: ${config.scheduleInterval}分钟\n` +
-          `时间范围: ${config.scheduleStartTime} - ${config.scheduleEndTime}\n` +
-          `输出格式: ${config.scheduleUseImage ? '图片' : '文本'}\n` +
-          `监控服务器: ${config.serverList.length}个\n` +
-          `目标群组: ${groups}个\n` +
-          `QQ适配器: ${qqStatus} (名称: ${config.qqAdapterName})\n` +
-          `群组ID格式: ${config.useFullChannelId ? '适配器:群号' : '群号'}\n\n` +
-          `使用 cs.schedule -h 查看所有命令选项`
-      }
-
-      if (options.start) {
-        config.scheduleEnabled = true
-        startScheduleTask()
-        return '✅ 定时任务已启动'
-      }
-
-      if (options.stop) {
-        config.scheduleEnabled = false
-        stopScheduleTask()
-        return '✅ 定时任务已停止'
-      }
-
-      if (options.test) {
-        await executeScheduleTask()
-        return '✅ 定时任务测试执行完成'
-      }
-
-      if (options.run) {
-        await executeScheduleTask()
-        return '✅ 已立即执行一次定时任务'
-      }
-
-      if (options.testQQ) {
-        const qqBots = ctx.bots.filter(bot => bot.platform === config.qqAdapterName)
-        if (qqBots.length === 0) {
-          return `❌ 找不到 ${config.qqAdapterName} 适配器的机器人\n请确保已正确配置QQ适配器`
-        }
-
-        let message = `✅ 找到 ${qqBots.length} 个 ${config.qqAdapterName} 适配器机器人:\n`
-        qqBots.forEach((bot, index) => {
-          message += `${index + 1}. ${bot.selfId} (在线: ${bot.status})\n`
-        })
-
-        // 测试发送消息到当前会话
-        if (session) {
-          try {
-            await session.send('测试消息: QQ适配器连接正常 ✓')
-            message += '\n✅ 当前会话消息发送测试成功'
-          } catch (error) {
-            message += `\n❌ 当前会话消息发送失败: ${error.message}`
-          }
-        }
-
-        return message
-      }
-
-      if (options.addGroup) {
-        // 检查群组ID格式
-        let groupId = options.addGroup.trim()
-
-        // 如果启用了完整频道ID格式但用户没有提供适配器前缀，自动添加
-        if (config.useFullChannelId && !groupId.includes(':')) {
-          groupId = `${config.qqAdapterName}:${groupId}`
-        }
-
-        if (!config.scheduleGroups.includes(groupId)) {
-          config.scheduleGroups.push(groupId)
-          return `✅ 已添加群组 ${groupId} 到定时任务\n当前列表: ${config.scheduleGroups.length} 个群组`
-        } else {
-          return `❌ 群组 ${groupId} 已在列表中`
-        }
-      }
-
-      if (options.removeGroup) {
-        const index = config.scheduleGroups.indexOf(options.removeGroup)
-        if (index !== -1) {
-          config.scheduleGroups.splice(index, 1)
-          return `✅ 已从定时任务移除群组 ${options.removeGroup}`
-        } else {
-          return `❌ 群组 ${options.removeGroup} 不在列表中`
-        }
-      }
-
-      if (options.listGroups) {
-        if (config.scheduleGroups.length === 0) {
-          return '📋 定时任务群组列表为空\n使用 cs.schedule -a <群组ID> 添加群组'
-        }
-
-        let message = '📋 定时任务群组列表:\n'
-        config.scheduleGroups.forEach((groupId, index) => {
-          message += `${index + 1}. ${groupId}\n`
-        })
-        return message
-      }
-
-      // 如果没有指定选项，显示帮助信息
-      return `📅 定时任务管理命令\n\n` +
-        `选项:\n` +
-        `-s, -status      查看定时任务状态\n` +
-        `-S, -start       启动定时任务\n` +
-        `-T, -stop        停止定时任务\n` +
-        `-t, -test        测试定时任务\n` +
-        `-R, -run         立即执行一次定时任务\n` +
-        `-q, -testQQ      测试QQ适配器连接\n` +
-        `-a, -addGroup    添加群组到定时任务\n` +
-        `-r, -removeGroup 从定时任务移除群组\n` +
-        `-l, -listGroups  列出定时任务群组\n\n` +
-        `示例:\n` +
-        `cs.schedule -s          # 查看状态\n` +
-        `cs.schedule -S          # 启动定时任务\n` +
-        `cs.schedule -a 123456   # 添加群组123456\n` +
-        `cs.schedule -t          # 测试执行\n` +
-        `cs.schedule -q          # 测试QQ适配器连接`
-    })
-
-  // 主命令 - cs [ip:端口] 查询服务器状态
+  // 主命令 - cs [地址:端口] 查询服务器状态
   ctx.command('cs <address>', '查询服务器状态')
     .alias('查询')
     .alias('server')
@@ -1046,7 +755,7 @@ export function apply(ctx: Context, config: Config) {
     .option('text', '-t 输出文本信息', { type: Boolean, fallback: false })
     .option('clear', '-c 清除缓存', { type: Boolean, fallback: false })
     .action(async ({ session, options }, address) => {
-      if (!address) return '使用格式: cs [地址:端口]\n示例: cs 127.0.0.1:27015\n示例: cs edgebug.cn'
+      if (!address) return '使用格式: cs [地址:端口]\n示例: cs 127.0.0.1:27015 / cs edgebug.cn'
 
       if (options.clear) {
         const count = cache.size
@@ -1119,19 +828,10 @@ export function apply(ctx: Context, config: Config) {
 
         const cacheSize = cache.size
 
-        const scheduleStatus = config.scheduleEnabled ? '✅ 已启用' : '❌ 已禁用'
-        const scheduleTimerStatus = scheduleTimer ? '运行中' : '未运行'
-
-        // 检查QQ适配器
-        const qqBots = ctx.bots.filter(bot => bot.platform === config.qqAdapterName)
-        const qqStatus = qqBots.length > 0 ? `✅ 可用 (${qqBots.length}个)` : '❌ 不可用'
-
         return `✅ CS服务器查询插件状态\n` +
           `💾 缓存数量: ${cacheSize} 条\n` +
           `🕹️ Gamedig插件: ${gamedigStatus}\n` +
           `🖼️ Canvas插件: ${canvasStatus}\n` +
-          `📅 定时任务: ${scheduleStatus} (${scheduleTimerStatus})\n` +
-          `🤖 QQ适配器: ${qqStatus} (名称: ${config.qqAdapterName})\n` +
           `⚙️ 配置参数:\n` +
           `   超时时间: ${config.timeout}ms\n` +
           `   缓存时间: ${config.cacheTime}ms\n` +
@@ -1141,11 +841,9 @@ export function apply(ctx: Context, config: Config) {
           `   显示密码保护: ${config.showPassword ? '是' : '否'}\n` +
           `   生成图片横幅: ${config.generateImage ? '是' : '否'}\n` +
           `   图片最小高度: ${config.imageHeight}px\n` +
-          `   字体大小: ${config.fontSize}px\n` +
-          `   群组ID格式: ${config.useFullChannelId ? '适配器:群号' : '群号'}\n\n` +
+          `   字体大小: ${config.fontSize}px\n\n` +
           `📝 使用: cs [地址:端口]\n` +
-          `📝 选项: -i 生成图片, -t 输出文本, -c 清除缓存\n` +
-          `📅 定时任务: cs.schedule 查看定时任务管理`
+          `📝 选项: -i 生成图片, -t 输出文本, -c 清除缓存`
       } catch (error: any) {
         return `❌ 插件状态异常: ${error.message}\n请确保已安装并启用 koishi-plugin-gamedig 和 koishi-plugin-canvas 插件`
       }
@@ -1157,23 +855,16 @@ export function apply(ctx: Context, config: Config) {
       return `🔫 CS服务器查询插件帮助\n\n` +
         `📝 基本用法:\n` +
         `cs [地址:端口]\n` +
-        `示例: cs 127.0.0.1:27015\n` +
-        `示例: cs edgebug.cn\n\n` +
+        `示例: cs 127.0.0.1:27015 / cs edgebug.cn\n` +
         `🔧 选项:\n` +
         `-i 生成图片横幅\n` +
         `-t 输出文本信息\n` +
         `-c 清除缓存\n\n` +
         `🎯 快捷命令:\n` +
-        `csss - 批量查询服务器状态\n` +
-        `cs.schedule - 定时任务管理\n\n` +
+        `csss - 批量查询服务器状态\n\n` +
         `📋 其他命令:\n` +
         `cs.status - 检查插件状态和配置\n` +
         `cs.help - 显示此帮助\n\n` +
-        `📅 定时任务:\n` +
-        `定时自动向指定QQ群组发送服务器状态\n` +
-        `配置: 插件配置面板中设置\n` +
-        `管理: cs.schedule 命令\n` +
-        `群组ID格式: ${config.useFullChannelId ? '适配器:群号 (如: qq:123456)' : '群号 (如: 123456)'}\n\n` +
         `💡 提示:\n` +
         `1. 如果不指定端口，默认使用27015\n` +
         `2. 只支持CS服务器查询\n` +
@@ -1265,7 +956,6 @@ export function apply(ctx: Context, config: Config) {
         }
 
         let message = generateTextTable(results, serversToQuery, queryTime, '批量查询结果')
-        message += '\n📋 输入 `cs <序号>` 查看服务器详情'
         message += '\n📋 输入 `cs <服务器地址>` 查询单个服务器'
 
         return message
@@ -1275,16 +965,8 @@ export function apply(ctx: Context, config: Config) {
       }
     })
 
-  // 插件启动时初始化定时任务
-  if (config.scheduleEnabled) {
-    startScheduleTask()
-  }
-
   // 插件卸载时清理资源
   ctx.on('dispose', () => {
     cache.clear()
-    stopScheduleTask()
   })
 }
-
-export const inject = ['canvas', 'gamedig', 'database']

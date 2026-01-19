@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-csss",
   "description": "Check the status of the CS server",
-  "version": "1.2.1",
+  "version": "2.0.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -9,6 +9,11 @@
     "dist"
   ],
   "license": "MIT",
+  "homepage": "https://github.com/sanksu/koishi-plugin-csss",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sanksu/koishi-plugin-csss.git"
+  },
   "keywords": [
     "chatbot",
     "koishi",
