@@ -1,9 +1,9 @@
 import { Context, Schema, h } from 'koishi'
 import { } from 'koishi-plugin-gamedig'
-import { } from 'koishi-plugin-puppeteer'   // 改为 puppeteer
+import { } from 'koishi-plugin-puppeteer'
 
 export const name = 'csss'
-export const inject = ['puppeteer', 'gamedig', 'database']   // 注入 puppeteer
+export const inject = ['puppeteer', 'gamedig', 'database']
 
 export interface Config {
   timeout: number
@@ -14,261 +14,168 @@ export interface Config {
   showPassword: boolean
   generateImage: boolean
   imageWidth: number
-  imageHeight: number
-  fontSize: number
+  imageHeight: number // 注：实际作为 min-height 使用
   fontFamily: string
-  serverList: string[]
-  batchTimeout: number
+  customCSS: string
 }
 
 export const Config: Schema<Config> = Schema.object({
-  timeout: Schema.number()
-    .min(1000)
-    .max(30000)
-    .default(5000)
-    .description('查询超时时间(毫秒)'),
-
-  cacheTime: Schema.number()
-    .min(0)
-    .max(300000)
-    .default(30000)
-    .description('缓存时间(毫秒，0为禁用缓存)'),
-
-  maxPlayers: Schema.number()
-    .min(0)
-    .max(100)
-    .default(20)
-    .description('最大显示玩家数'),
-
-  retryCount: Schema.number()
-    .min(0)
-    .max(5)
-    .default(2)
-    .description('查询失败重试次数'),
-
-  showVAC: Schema.boolean()
-    .default(true)
-    .description('是否显示VAC状态'),
-
-  showPassword: Schema.boolean()
-    .default(true)
-    .description('是否显示密码保护信息'),
-
-  generateImage: Schema.boolean()
-    .default(true)
-    .description('是否生成图片横幅（影响cs和csss命令）'),
-
-  imageWidth: Schema.number()
-    .min(600)
-    .max(2000)
-    .default(1200)
-    .description('图片宽度(像素)'),
-
-  imageHeight: Schema.number()
-    .min(200)
-    .max(2500)
-    .default(500)
-    .description('图片最小高度(像素)，实际高度会根据内容自适应'),
-
-  fontSize: Schema.number()
-    .min(12)
-    .max(48)
-    .default(24)
-    .description('字体大小'),
-
-  fontFamily: Schema.string()
-    .default('"JetBrains Mono", monospace')
-    .description('字体'),
-
-  serverList: Schema.array(Schema.string())
-    .role('table')
-    .description('批量查询服务器列表（格式: [地址]:[端口]，每行一个）')
-    .default([
-      'edgebug.cn:27015',
-      'edgebug.cn:27016',
-      'edgebug.cn:27017',
-      'edgebug.cn:27018',
-      'edgebug.cn:27019',
-    ]),
-
-  batchTimeout: Schema.number()
-    .min(1000)
-    .max(60000)
-    .default(15000)
-    .description('批量查询总超时时间(毫秒)'),
+  timeout: Schema.number().min(100).max(30000).default(500).description('查询超时时间(毫秒)'),
+  cacheTime: Schema.number().min(0).max(300000).default(3000).description('缓存时间(毫秒，0为禁用缓存)'),
+  maxPlayers: Schema.number().min(0).max(100).default(20).description('最大显示玩家数'),
+  retryCount: Schema.number().min(0).max(5).default(1).description('查询失败重试次数'),
+  showVAC: Schema.boolean().default(true).description('是否显示VAC状态'),
+  showPassword: Schema.boolean().default(true).description('是否显示密码保护信息'),
+  generateImage: Schema.boolean().default(true).description('是否生成图片横幅（影响cs和csss命令）'),
+  imageWidth: Schema.number().min(600).max(2000).default(1200).description('图片宽度(像素)'),
+  imageHeight: Schema.number().min(200).max(2500).default(500).description('图片最小高度(像素)，实际高度会根据内容自适应'),
+  // 移除 fontSize 配置项
+  fontFamily: Schema.string().default('JetBrains Mono, monospace').description('字体'),
+  customCSS: Schema.string().role('textarea').description('自定义CSS样式，可通过此配置调整字体大小等').default(''),
 })
 
-interface CacheEntry {
-  timestamp: number
-  data: any
+// 类型定义
+interface GamedigPlayer { name: string; raw?: Record<string, unknown> }
+interface GamedigResult {
+  name: string; map: string; players: GamedigPlayer[]; bots: GamedigPlayer[]
+  maxplayers: number; password: boolean; ping: number
+  connect?: string; host?: string; port?: number; raw?: { secure?: boolean }
 }
+interface ServerQueryData { game: string; result: GamedigResult }
+interface CacheEntry { timestamp: number; data: ServerQueryData }
+interface SingleQueryResult { index: number; server: string; success: boolean; data?: ServerQueryData; error?: string }
+interface BatchQueryResult { results: SingleQueryResult[]; queryTime: number; serversToQuery: string[] }
 
-// 颜色和样式常量
-const COLORS = {
-  background: '#1c1c1fcc',
-  text: '#71717a',
-  textLight: '#aaaaaa',
-  textLighter: '#dddddd',
-  textWhite: '#ffffff',
-  border: '#2e2e33',
-  accent: '#fbbf24',
-  success: '#4CAF50',
-  warning: '#FFC107',
-  error: '#c03f36',
-  pingGreen: '#4CAF50',
-  pingYellow: '#FFC107',
-  pingOrange: '#FF9800',
-  pingRed: '#c03f36',
-  playerOnline: '#4CAF50',
-  playerOffline: '#c03f36',
-  title: '#71717a',
-  highlight: '#fbbf24',
-  divider: '#555555',
-  timestamp: '#666666',
-  gold: '#FFD700',
-  playerName: '#fcf8de',
-}
+// 预编译正则表达式
+const CLEAN_NAME_REGEX = /^\d+|[\u0000-\u001F]/g
+const ESCAPE_HTML_REGEX = /[&<>"']/g
+const ESCAPE_MAP: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
 
-// 工具函数集合
+// 工具函数
 const utils = {
   formatPing(ping: number): string {
-    if (!ping || ping < 0) return '未知'
+    if (!ping || ping <= 0) return '未知'
     if (ping < 50) return `🟢 ${ping}ms`
     if (ping < 100) return `🟡 ${ping}ms`
     if (ping < 200) return `🟠 ${ping}ms`
     return `🔴 ${ping}ms`
   },
-
   cleanName(name: string): string {
-    return name ? name.replace(/\^[0-9]/g, '').replace(/[\u0000-\u001F]/g, '').trim() : '未知'
+    return name ? name.replace(CLEAN_NAME_REGEX, '').trim() : '未知'
   },
-
   truncateText(text: string, maxLength: number): string {
-    return text.length > maxLength ? text.substring(0, maxLength) + '...' : text
+    return text.length > maxLength ? text.slice(0, maxLength) + '...' : text
   },
-
   getPingColor(ping: number): string {
-    if (ping < 50) return COLORS.pingGreen
-    if (ping < 100) return COLORS.pingYellow
-    if (ping < 200) return COLORS.pingOrange
-    return COLORS.pingRed
+    if (ping < 50) return '#4CAF50'
+    if (ping < 100) return '#FFC107'
+    if (ping < 200) return '#FF9800'
+    return '#c03f36'
   },
-
   getPlayerColor(count: number): string {
-    return count > 0 ? COLORS.playerOnline : COLORS.playerOffline
+    return count > 0 ? '#4CAF50' : '#c03f36'
   },
-
   formatTime(ms: number): string {
     if (ms < 1000) return `${ms}ms`
     if (ms < 60000) return `${(ms / 1000).toFixed(1)}秒`
     return `${(ms / 1000).toFixed(0)}秒`
   },
+  escapeHtml(str: string): string {
+    return str ? str.replace(ESCAPE_HTML_REGEX, (ch) => ESCAPE_MAP[ch] || ch) : ''
+  },
+  getVisualLength(str: string): number {
+    let len = 0
+    for (const char of str) {
+      len += char.charCodeAt(0) > 255 ? 2 : 1
+    }
+    return len
+  },
+  padEndVisual(str: string, targetLen: number): string {
+    const currentLen = this.getVisualLength(str)
+    if (currentLen >= targetLen) return str
+    return str + ' '.repeat(targetLen - currentLen)
+  }
+}
+
+declare module 'koishi' {
+  interface Tables {
+    csss_server: { id: number; address: string }
+  }
 }
 
 export function apply(ctx: Context, config: Config) {
   const cache = new Map<string, CacheEntry>()
-  
-  // 检查所需插件是否可用
-  if (!ctx.gamedig) {
-    console.error('koishi-plugin-gamedig 未安装或未启用')
-    return ctx.logger('cs-server-status').error('需要安装并启用 koishi-plugin-gamedig 插件')
-  }
-  if (!ctx.puppeteer) {
-    console.error('koishi-plugin-puppeteer 未安装或未启用')
-    return ctx.logger('cs-server-status').error('需要安装并启用 koishi-plugin-puppeteer 插件')
-  }
+  const logger = ctx.logger('csss')
 
-  // 通用查询结果处理函数
-  async function queryServers(serversToQuery: string[]) {
-    const startTime = Date.now()
-    const results = await Promise.allSettled(
-      serversToQuery.map(async (server, index) => {
-        try {
-          const { host, port } = parseAddress(server)
-          const data = await queryServer(host, port)
-          return {
-            index: index + 1,
-            server,
-            success: true,
-            data
-          }
-        } catch (error: any) {
-          return {
-            index: index + 1,
-            server,
-            success: false,
-            error: error.message
-          }
-        }
-      })
-    )
-    const endTime = Date.now()
-    const queryTime = endTime - startTime
+  if (!ctx.gamedig) { logger.error('需要安装并启用 koishi-plugin-gamedig 插件'); return }
+  if (!ctx.puppeteer) { logger.error('需要安装并启用 koishi-plugin-puppeteer 插件'); return }
+  if (!ctx.database) { logger.error('需要安装并启用数据库插件以存储服务器列表'); return }
 
-    return { results, queryTime, serversToQuery }
+  ctx.model.extend('csss_server', {
+    id: 'unsigned',
+    address: 'string',
+  }, {
+    primary: 'id',
+    autoInc: true,
+    unique: ['address'],
+  })
+
+  async function getServerList(): Promise<string[]> {
+    const records = await ctx.database.get('csss_server', {}, ['id', 'address'])
+    return records.sort((a, b) => a.id - b.id).map(r => r.address)
   }
 
-  // 通用文本表格生成函数
-  function generateTextTable(results: any[], serversToQuery: string[], queryTime: number, title: string = '批量查询结果'): string {
-    const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length
-    const failed = results.length - successful
-
-    let message = `📊 ${title} (${utils.formatTime(queryTime)})\n`
-    message += `✅ 成功: ${successful} 个 | ❌ 失败: ${failed} 个\n\n`
-    message += '序号 服务器名称       在线人数\n'
-    message += '──────────────────────────────\n'
-
-    results.forEach((result, index) => {
-      const serverInfo = serversToQuery[index]
-      if (result.status === 'fulfilled') {
-        const { success, data, error } = result.value
-
-        if (success && data) {
-          const { result: serverData } = data
-          const serverName = serverData.name ? utils.cleanName(serverData.name) : '未知'
-          const playerCount = serverData.players?.length || 0
-          const maxPlayers = serverData.maxplayers || 0
-
-          const truncatedName = utils.truncateText(serverName, 20)
-          const paddedName = truncatedName.padEnd(20, ' ')
-
-          message += `${(index + 1).toString().padStart(2, ' ')}  ${paddedName} ${playerCount}/${maxPlayers}\n`
-        } else {
-          message += `${(index + 1).toString().padStart(2, ' ')}  ${serverInfo} ❌ 查询失败: ${error}\n`
-        }
-      } else {
-        message += `${(index + 1).toString().padStart(2, ' ')}  ${serverInfo} ❌ 查询失败\n`
-      }
-    })
-
-    return message
+  async function addServer(address: string): Promise<boolean> {
+    try {
+      await ctx.database.create('csss_server', { address })
+      return true
+    } catch (error) {
+      if ((error as Error).message.includes('UNIQUE')) return false
+      throw error
+    }
   }
 
-  function parseAddress(input: string): { host: string, port: number } {
+  async function removeServerByIndex(index: number): Promise<boolean> {
+    const records = await ctx.database.get('csss_server', {}, ['id'])
+    if (index < 1 || index > records.length) return false
+    await ctx.database.remove('csss_server', { id: records[index - 1].id })
+    return true
+  }
+
+  async function clearServers(): Promise<number> {
+    const count = (await ctx.database.get('csss_server', {}, ['id'])).length
+    if (count === 0) return 0
+    await ctx.database.remove('csss_server', {})
+    return count
+  }
+
+  function parseAddress(input: string): { host: string; port: number } {
+    if (typeof input !== 'string') throw new Error(`地址必须是字符串`)
     let address = input.replace(/^(http|https|udp|tcp):\/\//, '')
 
-    if (address.includes('[')) {
-      const match = address.match(/^\[([^\]]+)\](?::(\d+))?$/)
-      if (match) {
-        const host = match[1]
-        const port = match[2] ? parseInt(match[2]) : 27015
-        if (port >= 1 && port <= 65535) return { host, port }
-      }
+    const ipv6WithPortMatch = address.match(/^\[([^\]]+)\]:(\d+)$/)
+    if (ipv6WithPortMatch) {
+      const port = parseInt(ipv6WithPortMatch[2], 10)
+      if (port >= 1 && port <= 65535) return { host: ipv6WithPortMatch[1], port }
+      throw new Error('端口无效')
     }
+
+    const ipv6OnlyMatch = address.match(/^\[([^\]]+)\]$/)
+    if (ipv6OnlyMatch) return { host: ipv6OnlyMatch[1], port: 27015 }
 
     const parts = address.split(':')
     if (parts.length === 2) {
-      const host = parts[0]
-      const port = parseInt(parts[1])
-      if (!isNaN(port) && port >= 1 && port <= 65535) return { host, port }
-    } else if (parts.length === 1) {
-      return { host: parts[0], port: 27015 }
+      const port = parseInt(parts[1], 10)
+      if (port >= 1 && port <= 65535) return { host: parts[0], port }
+      throw new Error('端口无效')
     }
 
-    throw new Error(`无效的地址格式: ${input}\n正确格式: [地址]:[端口] 或 [地址]`)
+    if (parts.length === 1) return { host: parts[0], port: 27015 }
+
+    throw new Error(`无效的地址格式 "${input}"。支持: IP:端口, 域名:端口, [IPv6]:端口`)
   }
 
-  async function queryServer(host: string, port: number): Promise<{ game: string, result: any }> {
+  async function queryServer(host: string, port: number): Promise<ServerQueryData> {
     const cacheKey = `${host}:${port}`
     const now = Date.now()
 
@@ -279,642 +186,317 @@ export function apply(ctx: Context, config: Config) {
       }
     }
 
-    let lastError: Error
-
+    let lastError: unknown
     for (let i = 0; i <= config.retryCount; i++) {
       try {
         const result = await ctx.gamedig.query({
-          type: 'csgo',
-          host,
-          port,
-          maxAttempts: 1,
-          socketTimeout: config.timeout,
-          attemptTimeout: config.timeout,
+          type: 'csgo', host, port, maxAttempts: 1,
+          socketTimeout: config.timeout, attemptTimeout: config.timeout,
         })
-
-        const data = { game: 'csgo', result }
+        const data: ServerQueryData = { game: 'csgo', result: result as GamedigResult }
 
         if (config.cacheTime > 0) {
           cache.set(cacheKey, { timestamp: now, data })
         }
-
         return data
       } catch (error) {
         lastError = error
-        if (i < config.retryCount) {
-          await new Promise(resolve => setTimeout(resolve, 1000))
-        }
+        if (i < config.retryCount) await new Promise(resolve => setTimeout(resolve, 1000))
       }
     }
-
-    throw new Error(`无法连接到服务器: ${lastError?.message || '未知错误'}`)
+    throw new Error(`无法连接到服务器 ${lastError instanceof Error ? lastError.message : '未知错误'}`)
   }
 
-  function formatServerInfo(data: { game: string, result: any }): string {
-    const { result } = data
+  async function queryServers(serversToQuery: string[]): Promise<BatchQueryResult> {
+    const startTime = Date.now()
+    const results = await Promise.allSettled(
+      serversToQuery.map(async (server, index) => {
+        try {
+          const { host, port } = parseAddress(server)
+          const data = await queryServer(host, port)
+          return { index: index + 1, server, success: true, data } as SingleQueryResult
+        } catch (error) {
+          return { index: index + 1, server, success: false, error: (error as Error).message } as SingleQueryResult
+        }
+      })
+    )
 
+    return {
+      results: results.map((res, idx) => res.status === 'fulfilled' ? res.value : { index: idx + 1, server: serversToQuery[idx], success: false, error: '未知错误' }),
+      queryTime: Date.now() - startTime,
+      serversToQuery
+    }
+  }
+
+  function generateTextTable(results: SingleQueryResult[], serversToQuery: string[], queryTime: number, title: string = '批量查询结果'): string {
+    const successful = results.filter(r => r.success).length
+    let message = `📊 ${title} (${utils.formatTime(queryTime)})\n✅ 成功 ${successful} 个 ❌ 失败 ${results.length - successful} 个\n\n`
+
+    results.forEach((result, idx) => {
+      const num = (idx + 1).toString().padStart(2, ' ')
+      if (result.success && result.data) {
+        const d = result.data.result
+        const name = utils.cleanName(d.name || '未知')
+        const truncated = utils.truncateText(name, 12)
+        const paddedName = utils.padEndVisual(truncated, 24)
+        message += `${num} ${paddedName} ${d.players.length}/${d.maxplayers}\n`
+      } else {
+        message += `${num} ${serversToQuery[idx].padEnd(20)} ❌ 查询失败\n`
+      }
+    })
+    return message
+  }
+
+  function formatServerInfo(data: ServerQueryData): string {
+    const r = data.result
     const lines = [
       ` Counter-Strike 服务器\n`,
-      result.name ? `🏷️ 名称: ${utils.cleanName(result.name)}` : null,
-      result.map ? `🗺️ 地图: ${result.map}` : null,
-      `👥 玩家: ${result.players?.length || 0}/${result.maxplayers || 0}${result.bots?.length ? ` (${result.bots.length} Bot)` : ''}`,
-      config.showPassword && result.password !== undefined ? `🔒 密码: ${result.password ? '是 🔐' : '否 🔓'}` : null,
-      result.ping ? `📶 Ping: ${utils.formatPing(result.ping)}` : null,
-      result.connect ? `🔗 连接: ${result.connect}` : `📍 地址: ${result.host || '未知'}:${result.port || '未知'}`,
-      config.showVAC && result.raw?.secure !== undefined ? `🛡️ VAC: ${result.raw.secure ? '启用 ✅' : '关闭 ❌'}` : null,
+      r.name ? `🏷️ 名称 ${utils.cleanName(r.name)}` : null,
+      r.map ? `🗺️ 地图 ${r.map}` : null,
+      `👥 玩家 ${r.players.length}/${r.maxplayers}${r.bots.length ? ` (${r.bots.length} Bot)` : ''}`,
+      config.showPassword && r.password !== undefined ? `🔒 密码 ${r.password ? '是 🔐' : '否 🔓'}` : null,
+      r.ping ? `📶 Ping ${utils.formatPing(r.ping)}` : null,
+      r.connect ? `🔗 连接 ${r.connect}` : `📍 地址 ${r.host || '未知'}:${r.port || '未知'}`,
+      config.showVAC && r.raw?.secure !== undefined ? `🛡️ VAC ${r.raw.secure ? '启用 ✅' : '关闭 ❌'}` : null,
     ]
-
     return lines.filter(Boolean).join('\n')
   }
 
-  function formatPlayers(players: any[]): string {
-    if (!players || players.length === 0) {
-      return '👤 服务器当前无在线玩家'
-    }
-
-    const sortedPlayers = [...players].sort((a, b) => {
-      const nameA = utils.cleanName(a.name).toLowerCase()
-      const nameB = utils.cleanName(b.name).toLowerCase()
-      return nameA.localeCompare(nameB)
-    })
-
-    const displayPlayers = sortedPlayers.slice(0, config.maxPlayers)
-    let message = `👤 在线玩家 (${players.length}人):\n`
-
-    displayPlayers.forEach((player, index) => {
-      message += `${index + 1}. ${utils.cleanName(player.name)}\n`
-    })
-
-    if (players.length > config.maxPlayers) {
-      message += `... 还有 ${players.length - config.maxPlayers} 位玩家未显示`
-    }
-
-    return message.trim()
+  function formatPlayers(players: GamedigPlayer[]): string {
+    if (!players.length) return '👤 服务器当前无在线玩家'
+    const sorted = [...players].sort((a, b) => utils.cleanName(a.name).localeCompare(utils.cleanName(b.name)))
+    const display = sorted.slice(0, config.maxPlayers)
+    let msg = `👤 在线玩家 (${players.length}人)\n`
+    display.forEach((p, i) => msg += `${i + 1}. ${utils.cleanName(p.name)}\n`)
+    if (players.length > config.maxPlayers) msg += `... 还有 ${players.length - config.maxPlayers} 位玩家未显示`
+    return msg.trim()
   }
 
-function generateServerHTML(data: { game: string, result: any }, host: string, port: number): string {
-  const { result } = data
-  const playerCount = result.players?.length || 0
-  const botCount = result.bots?.length || 0
-  const maxPlayers = result.maxplayers || 0
-  const cleanName = result.name ? utils.cleanName(result.name) : '未知服务器'
-  const now = new Date().toLocaleString('zh-CN')
-
-  // 玩家列表 HTML
-  let playersHTML = ''
-  if (playerCount === 0) {
-    playersHTML = `<div class="player-row" style="color: ${COLORS.textLight};">服务器当前无玩家在线</div>`
-  } else {
-    const sortedPlayers = [...result.players].sort((a, b) =>
-      utils.cleanName(a.name).localeCompare(utils.cleanName(b.name))
-    )
-    const displayPlayers = sortedPlayers.slice(0, config.maxPlayers)
-
-    const needTwoColumns = playerCount > 10
-    if (needTwoColumns) {
-      const half = Math.ceil(displayPlayers.length / 2)
-      const left = displayPlayers.slice(0, half)
-      const right = displayPlayers.slice(half, half * 2)
-      playersHTML = '<div style="display: flex; gap: 40px;">'
-      playersHTML += '<div>' + left.map(p => 
-        `<div class="player-row">${utils.truncateText(utils.cleanName(p.name), 30)}</div>`
-      ).join('') + '</div>'
-      playersHTML += '<div>' + right.map(p => 
-        `<div class="player-row">${utils.truncateText(utils.cleanName(p.name), 30)}</div>`
-      ).join('') + '</div>'
-      playersHTML += '</div>'
-    } else {
-      playersHTML = displayPlayers.map(p => 
-        `<div class="player-row">${utils.truncateText(utils.cleanName(p.name), 40)}</div>`
-      ).join('')
-    }
-
-    if (playerCount > config.maxPlayers) {
-      playersHTML += `<div class="player-row" style="color: ${COLORS.textLight}; font-style: italic;">... 还有 ${playerCount - config.maxPlayers} 位玩家未显示</div>`
-    }
-  }
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      background: rgba(28,28,31,0.8);
-      font-family: ${config.fontFamily};
-      width: ${config.imageWidth}px;
-      min-height: ${config.imageHeight}px;
-      padding: 40px;
-      color: ${COLORS.text};
-      position: relative;
-      border: 2px solid ${COLORS.border};
-    }
-    /* 边框装饰 */
-    .corner {
-      position: absolute;
-      width: 25px;
-      height: 25px;
-      border-color: ${COLORS.accent};
-      border-style: solid;
-      border-width: 0;
-    }
-    .corner-tl { top: 2px; left: 2px; border-top-width: 3px; border-left-width: 3px; }
-    .corner-tr { top: 2px; right: 2px; border-top-width: 3px; border-right-width: 3px; }
-    .corner-bl { bottom: 2px; left: 2px; border-bottom-width: 3px; border-left-width: 3px; }
-    .corner-br { bottom: 2px; right: 2px; border-bottom-width: 3px; border-right-width: 3px; }
-
-
-    .title {
-      text-align: center;
-      font-size: ${config.fontSize * 1.5}px;
-      color: ${COLORS.title};
-      margin-bottom: 20px;
-    }
-    .server-name {
-      text-align: center;
-      font-size: ${config.fontSize * 1.8}px;
-      font-weight: bold;
-      color: ${COLORS.highlight};
-      margin: 10px 0 20px;
-      word-break: break-word;
-    }
-    .divider {
-      height: 2px;
-      background: ${COLORS.border};
-      margin: 20px 0;
-    }
-    .info-row {
-      display: flex;
-      justify-content: space-between;
-      margin: 15px 0;
-      font-size: ${config.fontSize}px;
-    }
-    .player-section {
-      margin-top: 20px;
-    }
-    .player-section-title {
-      font-size: ${config.fontSize}px;
-      font-weight: bold;
-      color: ${COLORS.playerName};
-      margin-bottom: 10px;
-    }
-    .player-row {
-      font-size: ${config.fontSize * 0.9}px;
-      color: ${COLORS.textLighter};
-      line-height: 1.8;
-    }
-    .timestamp {
-      margin-top: 30px;
-      font-size: ${config.fontSize * 0.8}px;
-      color: ${COLORS.timestamp};
-      text-align: left;
-    }
-  </style>
-</head>
-<body>
-  <div class="corner corner-tl"></div>
-  <div class="corner corner-tr"></div>
-  <div class="corner corner-bl"></div>
-  <div class="corner corner-br"></div>
-
-  <div class="title">[服务器状态查询]</div>
-  <div class="server-name">${cleanName}</div>
-  <div class="divider"></div>
-
-  <div class="info-row">
-    <span>地图: ${result.map || '未知'}</span>
-    <span>IP: ${host}:${port}</span>
-  </div>
-  <div class="info-row">
-    <span style="color: ${utils.getPlayerColor(playerCount)};">人数: ${playerCount}/${maxPlayers}${botCount ? ` (${botCount} Bot)` : ''}</span>
-    <span style="color: ${utils.getPingColor(result.ping)};">Ping: ${result.ping ? result.ping + 'ms' : '未知'}</span>
-  </div>
-
-  <div class="player-section">
-    <div class="player-section-title">在线玩家</div>
-    <div class="divider" style="margin: 5px 0 15px;"></div>
-    ${playersHTML}
-  </div>
-
-  <div class="timestamp">查询时间: ${now}</div>
-</body>
-</html>`
-}
-
-function generateBatchHTML(results: any[], serversToQuery: string[], queryTime: number): string {
-  const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length
-  const failed = results.length - successful
-  const now = new Date().toLocaleString('zh-CN')
-
-  let serversHTML = ''
-  results.forEach((result, index) => {
-    const server = serversToQuery[index]
-    if (result.status === 'fulfilled' && result.value.success) {
-      const data = result.value.data.result
-      const name = data.name ? utils.cleanName(data.name) : '未知'
-      const playerCount = data.players?.length || 0
-      const maxPlayers = data.maxplayers || 0
-      const map = data.map || ''
-      const ping = data.ping || '?'
-      const pingColor = utils.getPingColor(ping)
-      const playerColor = playerCount > 0 ? COLORS.success : COLORS.error
-      serversHTML += `
-        <div class="server-item">
-          <div class="server-header">
-            <span class="server-index">${index+1}.</span>
-            <span class="server-name">${name}</span>
-            <span class="server-players" style="color: ${playerColor};">${playerCount}/${maxPlayers}</span>
-          </div>
-          <div class="server-details">
-            <span class="server-addr">${server}</span>
-            <span class="server-map">地图: ${map}</span>
-            <span class="server-ping" style="color: ${pingColor};">延迟: ${ping}ms</span>
-          </div>
-        </div>
-      `
-    } else {
-      const errorMsg = result.value?.error || '未知错误'
-      serversHTML += `
-        <div class="server-item error">
-          <div class="server-header">
-            <span class="server-index">${index+1}.</span>
-            <span class="server-name">${server}</span>
-            <span class="server-status">❌ 查询失败</span>
-          </div>
-          <div class="server-details error-msg">${errorMsg}</div>
-        </div>
-      `
-    }
-  })
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      background: rgba(28,28,31,0.8);
-      font-family: ${config.fontFamily};
-      width: ${config.imageWidth}px;
-      min-height: ${config.imageHeight}px;
-      padding: 40px;
-      color: ${COLORS.text};
-      position: relative;
-      border: 2px solid ${COLORS.border};
-    }
-    .corner {
-      position: absolute;
-      width: 25px;
-      height: 25px;
-      border-color: ${COLORS.accent};
-      border-style: solid;
-      border-width: 0;
-    }
-    .corner-tl { top: 2px; left: 2px; border-top-width: 3px; border-left-width: 3px; }
-    .corner-tr { top: 2px; right: 2px; border-top-width: 3px; border-right-width: 3px; }
-    .corner-bl { bottom: 2px; left: 2px; border-bottom-width: 3px; border-left-width: 3px; }
-    .corner-br { bottom: 2px; right: 2px; border-bottom-width: 3px; border-right-width: 3px; }
-
-    .title {
-      text-align: center;
-      font-size: ${config.fontSize * 1.8}px;
-      color: ${COLORS.title};
-      margin-bottom: 20px;
-    }
-    .stats {
-      display: flex;
-      justify-content: space-between;
-      font-size: ${config.fontSize}px;
-      margin-bottom: 10px;
-    }
-    .divider {
-      height: 2px;
-      background: ${COLORS.gold};
-      margin: 15px 0 30px;
-    }
-    .server-item {
-      margin-bottom: 30px;
-      border-bottom: 1px solid ${COLORS.divider};
-      padding-bottom: 20px;
-    }
-    .server-item:last-child {
-      border-bottom: none;
-    }
-    .server-header {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-size: ${config.fontSize * 1.1}px;
-      font-weight: bold;
-      color: ${COLORS.textWhite};
-      margin-bottom: 8px;
-    }
-    .server-index {
-      color: ${COLORS.accent};
-    }
-    .server-players {
-      margin-left: auto;
-    }
-    .server-details {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 20px;
-      font-size: ${config.fontSize * 0.9}px;
-      color: ${COLORS.textLight};
-    }
-    .server-details span {
-      white-space: nowrap;
-    }
-    .error .server-name {
-      color: ${COLORS.error};
-    }
-    .error-msg {
-      color: ${COLORS.error};
-      font-size: ${config.fontSize}px;
-    }
-    .timestamp {
-      margin-top: 20px;
-      font-size: ${config.fontSize * 0.8}px;
-      color: ${COLORS.timestamp};
-    }
-  </style>
-</head>
-<body>
-  <!-- 边框装饰 -->
-  <div class="corner corner-tl"></div>
-  <div class="corner corner-tr"></div>
-  <div class="corner corner-bl"></div>
-  <div class="corner corner-br"></div>
-
-  <div class="title">[服务器状态批量查询]</div>
-  <div class="stats">
-    <span>查询时间: ${now}</span>
-    <span>耗时: ${utils.formatTime(queryTime)}  成功: ${successful}/${results.length}</span>
-  </div>
-  <div class="divider"></div>
-
-  ${serversHTML}
-
-  <div class="timestamp">📋 输入 \`cs <服务器地址>\` 查询单个服务器</div>
-</body>
-</html>`
-}
-  
-async function generateServerImage(data: { game: string, result: any }, host: string, port: number): Promise<Buffer> {
-  const html = generateServerHTML(data, host, port)
-  const page = await ctx.puppeteer.page()
-  try {
-    await page.setViewport({
-      width: config.imageWidth,
-      height: config.imageHeight,
-      deviceScaleFactor: 2,
-    })
-    await page.setContent(html, { waitUntil: 'networkidle0' })
-    const buffer = await page.screenshot({
-      fullPage: true,
-      type: 'png',
-    })
-    return buffer
-  } finally {
-    await page.close().catch(() => {})
-  }
-}
-
-async function generateBatchImage(results: any[], serversToQuery: string[], queryTime: number): Promise<Buffer> {
-  const html = generateBatchHTML(results, serversToQuery, queryTime)
-  const page = await ctx.puppeteer.page()
-  try {
-    await page.setViewport({
-      width: config.imageWidth,
-      height: config.imageHeight,
-      deviceScaleFactor: 2,
-    })
-    await page.setContent(html, { waitUntil: 'networkidle0' })
-    const buffer = await page.screenshot({
-      fullPage: true,
-      type: 'png',
-    })
-    return buffer
-  } finally {
-    await page.close().catch(() => {})
-  }
-}
-
-  // 主命令 - cs [地址:端口] 查询服务器状态
-  ctx.command('cs <address>', '查询服务器状态')
-    .alias('查询')
-    .alias('server')
-    .option('noPlayers', '-n 隐藏玩家列表', { type: Boolean, fallback: false })
-    .option('image', '-i 生成图片横幅', { type: Boolean, fallback: false })
-    .option('text', '-t 输出文本信息', { type: Boolean, fallback: false })
-    .option('clear', '-c 清除缓存', { type: Boolean, fallback: false })
-    .action(async ({ session, options }, address) => {
-      if (!address) return '使用格式: cs [地址:端口]\n示例: cs 127.0.0.1:27015 / cs edgebug.cn'
-
-      if (options.clear) {
-        const count = cache.size
-        cache.clear()
-        return `已清除 ${count} 条缓存记录`
+  // 基础 CSS
+  function getBaseCSS(): string {
+    return `
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { 
+        background: #1c1c1fcc; 
+        font-family: ${config.fontFamily}; 
+        width: ${config.imageWidth}px; 
+        min-height: ${config.imageHeight}px; 
+        padding: 40px; 
+        color: #71717a; 
+        position: relative; 
+        border: 2px solid #2e2e33; 
+        font-size: 24px; /* 基础字体大小，原 fontSize 默认值 */
       }
+      .corner { position: absolute; width: 25px; height: 25px; border-color: #fbbf24; border-style: solid; border-width: 0; }
+      .corner-tl { top: 2px; left: 2px; border-top-width: 3px; border-left-width: 3px; }
+      .corner-tr { top: 2px; right: 2px; border-top-width: 3px; border-right-width: 3px; }
+      .corner-bl { bottom: 2px; left: 2px; border-bottom-width: 3px; border-left-width: 3px; }
+      .corner-br { bottom: 2px; right: 2px; border-bottom-width: 3px; border-right-width: 3px; }
+      .divider { height: 2px; background: #2e2e33; margin: 20px 0; }
+      .timestamp { margin-top: 30px; font-size: 0.8em; color: #666666; text-align: left; }
+      ${config.customCSS ? `\n/* 用户自定义样式 */\n${config.customCSS}\n` : ''}
+    `
+  }
+
+  function generateServerHTML(data: ServerQueryData, host: string, port: number): string {
+    const r = data.result
+    const pCount = r.players.length
+    let playersHTML = ''
+
+    if (pCount === 0) {
+      playersHTML = `<div class="player-row" style="color: #aaaaaa;">服务器当前无玩家在线</div>`
+    } else {
+      const sorted = [...r.players].sort((a, b) => utils.cleanName(a.name).localeCompare(utils.cleanName(b.name))).slice(0, config.maxPlayers)
+      const isTwoCols = pCount > 10
+
+      if (isTwoCols) {
+        const half = Math.ceil(sorted.length / 2)
+        const renderCol = (arr: typeof sorted) => arr.map(p => `<div class="player-row">${utils.escapeHtml(utils.truncateText(utils.cleanName(p.name), 20))}</div>`).join('')
+        playersHTML = `<div style="display: flex; gap: 40px;"><div>${renderCol(sorted.slice(0, half))}</div><div>${renderCol(sorted.slice(half))}</div></div>`
+      } else {
+        playersHTML = sorted.map(p => `<div class="player-row">${utils.escapeHtml(utils.truncateText(utils.cleanName(p.name), 20))}</div>`).join('')
+      }
+      if (pCount > config.maxPlayers) {
+        playersHTML += `<div class="player-row" style="color: #aaaaaa; font-style: italic;">... 还有 ${pCount - config.maxPlayers} 位玩家未显示</div>`
+      }
+    }
+
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+      ${getBaseCSS()}
+      .title { text-align: center; font-size: 1.5em; color: #71717a; margin-bottom: 20px; }
+      .server-name { text-align: center; font-size: 1.8em; font-weight: bold; color: #fbbf24; margin: 10px 0 20px; word-break: break-word; }
+      .info-row { display: flex; justify-content: space-between; margin: 15px 0; font-size: 1em; }
+      .player-section { margin-top: 20px; }
+      .player-section-title { font-size: 1em; font-weight: bold; color: #fcf8de; margin-bottom: 10px; }
+      .player-row { font-size: 0.9em; color: #dddddd; line-height: 1.8; }
+    </style></head><body>
+      <div class="corner corner-tl"></div><div class="corner corner-tr"></div><div class="corner corner-bl"></div><div class="corner corner-br"></div>
+      <div class="title">[服务器状态查询]</div>
+      <div class="server-name">${utils.escapeHtml(utils.cleanName(r.name || '未知服务器'))}</div>
+      <div class="divider"></div>
+      <div class="info-row"><span>地图: ${utils.escapeHtml(r.map || '未知')}</span><span>IP: ${utils.escapeHtml(`${host}:${port}`)}</span></div>
+      <div class="info-row"><span style="color: ${utils.getPlayerColor(pCount)};">人数: ${pCount}/${r.maxplayers}${r.bots.length ? ` (${r.bots.length} Bot)` : ''}</span><span style="color: ${utils.getPingColor(r.ping)};">Ping: ${r.ping ? r.ping + 'ms' : '未知'}</span></div>
+      <div class="player-section"><div class="player-section-title">在线玩家</div><div class="divider" style="margin: 5px 0 15px;"></div>${playersHTML}</div>
+      <div class="timestamp">查询时间: ${new Date().toLocaleString('zh-CN')}</div>
+    </body></html>`
+  }
+
+  function generateBatchHTML(results: SingleQueryResult[], serversToQuery: string[], queryTime: number): string {
+    const successful = results.filter(r => r.success).length
+    let serversHTML = results.map((result, index) => {
+      if (result.success && result.data) {
+        const d = result.data.result
+        return `<div class="server-item">
+          <div class="server-header"><span class="server-index">${index + 1}.</span><span class="server-name">${utils.escapeHtml(utils.cleanName(d.name || '未知'))}</span><span class="server-players" style="color: ${utils.getPlayerColor(d.players.length)};">${d.players.length}/${d.maxplayers}</span></div>
+          <div class="server-details"><span class="server-addr">${utils.escapeHtml(serversToQuery[index])}</span></div>
+          <div class="server-details"><span class="server-map">地图: ${utils.escapeHtml(d.map || '')}</span><span class="server-ping" style="color: ${utils.getPingColor(d.ping)};">延迟: ${d.ping}ms</span></div>
+        </div>`
+      }
+      return `<div class="server-item error">
+        <div class="server-header"><span class="server-index">${index + 1}.</span><span class="server-name">${utils.escapeHtml(serversToQuery[index])}</span><span class="server-status">❌ 查询失败</span></div>
+        <div class="server-details error-msg">${utils.escapeHtml(result.error || '未知错误')}</div>
+      </div>`
+    }).join('')
+
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+      ${getBaseCSS()}
+      .title { text-align: center; font-size: 1.8em; color: #71717a; margin-bottom: 20px; font-weight: bold; }
+      .stats { display: flex; justify-content: space-between; font-size: 1em; margin-bottom: 10px; }
+      .divider { background: #FFD700; margin: 15px 0 30px; }
+      .server-item { margin-bottom: 30px; border-bottom: 1px solid #555555; padding-bottom: 20px; }
+      .server-item:last-child { border-bottom: none; }
+      .server-header { display: flex; align-items: center; gap: 10px; font-size: 1.2em; font-weight: bold; color: #ffffff; margin-bottom: 8px; }
+      .server-index { color: #fbbf24; }
+      .server-players { margin-left: auto; }
+      .server-details { display: flex; flex-wrap: wrap; gap: 20px; font-size: 0.9em; color: #aaaaaa; position: relative; }
+      .server-details span { white-space: nowrap; }
+      .server-details .server-ping {position: absolute;right: 0;font-size: 24px;}
+      .error .server-name { color: #c03f36; }
+      .error-msg { color: #c03f36; font-size: 1em; }
+    </style></head><body>
+      <div class="corner corner-tl"></div><div class="corner corner-tr"></div><div class="corner corner-bl"></div><div class="corner corner-br"></div>
+      <div class="title">[服务器状态批量查询]</div>
+      <div class="stats"><span>查询时间: ${new Date().toLocaleString('zh-CN')}</span><span>耗时: ${utils.formatTime(queryTime)} | 成功: ${successful}/${results.length}</span></div>
+      <div class="divider"></div>
+      ${serversHTML}
+      <div class="timestamp">📋 输入 \`cs 服务器地址\` 查询单个服务器</div>
+    </body></html>`
+  }
+
+  async function renderToImage(html: string): Promise<Buffer> {
+    const page = await ctx.puppeteer.page()
+    try {
+      await page.setViewport({ width: config.imageWidth, height: config.imageHeight, deviceScaleFactor: 2 })
+      await page.setContent(html, { waitUntil: 'load' })
+      return await page.screenshot({ fullPage: true, type: 'png' })
+    } finally {
+      await page.close().catch(() => { })
+    }
+  }
+
+  // 命令定义
+  ctx.command('cs <address:string>', '查询服务器状态')
+    .alias('查询').alias('server')
+    .option('image', '-i 生成图片横幅')
+    .option('text', '-t 输出文本信息')
+    .option('clear', '-c 清除缓存')
+    .action(async ({ options }, address) => {
+      if (!address) return '使用格式 cs [地址:端口]\n示例 cs 127.0.0.1:27015 cs edgebug.cn'
+      if (options?.clear) { const count = cache.size; cache.clear(); return `已清除 ${count} 条缓存记录` }
 
       try {
         const { host, port } = parseAddress(address)
         const data = await queryServer(host, port)
+        const shouldGenImage = options?.image || (config.generateImage && !options?.text)
 
-        const shouldGenerateImage = options.image || (config.generateImage && !options.text)
-
-        if (shouldGenerateImage) {
+        if (shouldGenImage) {
           try {
-            const imageBuffer = await generateServerImage(data, host, port)
-            return h.image(imageBuffer, 'image/png')
-          } catch (imageError) {
-            console.error('生成图片失败:', imageError)
-            return `生成图片失败: ${imageError.message}，已转为文本输出。\n\n${formatServerInfo(data)}\n\n${formatPlayers(data.result.players || [])}`
+            return h.image(await renderToImage(generateServerHTML(data, host, port)), 'image/png')
+          } catch (imgErr) {
+            logger.error('生成图片失败', imgErr)
+            return `生成图片失败，已转为文本输出。\n\n${formatServerInfo(data)}\n\n${formatPlayers(data.result.players)}`
           }
         }
-
-        let message = formatServerInfo(data)
-        message += '\n\n' + formatPlayers(data.result.players || [])
-        return message
+        return `${formatServerInfo(data)}\n\n${formatPlayers(data.result.players)}`
       } catch (error) {
-        let errorMessage = `查询失败: ${error.message}\n\n`
-
-        if (error.message.includes('无法加载 gamedig')) {
-          errorMessage += '请确保已安装 koishi-plugin-gamedig：\n'
-          errorMessage += '1. 在插件市场搜索并安装 koishi-plugin-gamedig\n'
-          errorMessage += '2. 启用该插件后重启'
-        } else if (error.message.includes('无效的地址格式')) {
-          errorMessage += '地址格式应为: 地址:端口\n'
-          errorMessage += '示例: 127.0.0.1:27015 或 edgebug.cn:27015\n'
-          errorMessage += '如果不指定端口，默认使用 27015'
-        } else {
-          errorMessage += '请检查：\n'
-          errorMessage += '1. 服务器地址和端口是否正确\n'
-          errorMessage += '2. 服务器是否已开启并允许查询\n'
-          errorMessage += '3. 防火墙是否允许访问\n'
-          errorMessage += '4. 服务器是否为CS服务器'
-        }
-
-        return errorMessage
+        const err = error as Error
+        let msg = `查询失败: ${err.message}\n\n`
+        if (err.message.includes('无效的地址格式')) msg += '地址格式应为 地址:端口，默认端口27015'
+        else msg += '请检查地址、防火墙及服务器类型'
+        return msg
       }
     })
 
-  // 检查插件状态和配置
   ctx.command('cs.status', '检查插件状态和配置')
     .action(async () => {
-      try {
-        const gamedigStatus = ctx.gamedig ? '✅ 可用' : '❌ 不可用'
-        let puppeteerStatus = '❌ 不可用'
-        if (ctx.puppeteer) {
-          try {
-            // 简单测试渲染功能
-            await ctx.puppeteer.render('<div>test</div>')
-            puppeteerStatus = '✅ 可用'
-          } catch (e) {
-            puppeteerStatus = `❌ 不可用: ${e.message}`
-          }
-        }
-        const cacheSize = cache.size
-
-        return `✅ CS服务器查询插件状态\n` +
-          `💾 缓存数量: ${cacheSize} 条\n` +
-          `🕹️ Gamedig插件: ${gamedigStatus}\n` +
-          `🖼️ Puppeteer插件: ${puppeteerStatus}\n` +
-          `⚙️ 配置参数:\n` +
-          `   超时时间: ${config.timeout}ms\n` +
-          `   缓存时间: ${config.cacheTime}ms\n` +
-          `   重试次数: ${config.retryCount}\n` +
-          `   最大显示玩家数: ${config.maxPlayers}\n` +
-          `   显示VAC状态: ${config.showVAC ? '是' : '否'}\n` +
-          `   显示密码保护: ${config.showPassword ? '是' : '否'}\n` +
-          `   生成图片横幅: ${config.generateImage ? '是' : '否'}\n` +
-          `   图片宽度: ${config.imageWidth}px\n` +
-          `   图片最小高度: ${config.imageHeight}px\n` +
-          `   字体大小: ${config.fontSize}px\n` +
-          `   字体: ${config.fontFamily}\n\n` +
-          `📝 使用: cs [地址:端口]\n` +
-          `📝 选项: -i 生成图片, -t 输出文本, -c 清除缓存`
-      } catch (error: any) {
-        return `❌ 插件状态异常: ${error.message}\n请确保已安装并启用 koishi-plugin-gamedig 和 koishi-plugin-puppeteer`
+      const gamedigStatus = ctx.gamedig ? '✅ 可用' : '❌ 不可用'
+      let puppeteerStatus = '❌ 不可用'
+      if (ctx.puppeteer) {
+        try { const page = await ctx.puppeteer.page(); await page.setContent('<div>test</div>'); await page.close(); puppeteerStatus = '✅ 可用' } catch (e) { puppeteerStatus = `❌ 不可用` }
       }
+      return `✅ CS服务器查询插件状态\n💾 缓存数量: ${cache.size}\n🗄️ 数据库服务器数量: ${(await getServerList()).length}\n🕹️ Gamedig: ${gamedigStatus}\n🖼️ Puppeteer: ${puppeteerStatus}\n⚙️ 配置: 超时=${config.timeout}ms 缓存=${config.cacheTime}ms 重试=${config.retryCount} 最大玩家=${config.maxPlayers} 图片=${config.generateImage ? '是' : '否'}`
     })
 
-  // 帮助命令
   ctx.command('cs.help', '查看帮助')
-    .action(() => {
-      return `🔫 CS服务器查询插件帮助\n\n` +
-        `📝 基本用法:\n` +
-        `cs [地址:端口]\n` +
-        `示例: cs 127.0.0.1:27015 / cs edgebug.cn\n` +
-        `🔧 选项:\n` +
-        `-i 生成图片横幅\n` +
-        `-t 输出文本信息\n` +
-        `-c 清除缓存\n\n` +
-        `🎯 快捷命令:\n` +
-        `csss - 批量查询服务器状态\n\n` +
-        `📋 其他命令:\n` +
-        `cs.status - 检查插件状态和配置\n` +
-        `cs.help - 显示此帮助\n\n` +
-        `💡 提示:\n` +
-        `1. 如果不指定端口，默认使用27015\n` +
-        `2. 只支持CS服务器查询\n` +
-        `3. 查询结果缓存${config.cacheTime}ms，使用 -c 清除缓存\n` +
-        `4. 需要安装 koishi-plugin-gamedig 和 koishi-plugin-puppeteer 插件`
-    })
+    .action(() => `🔫 CS服务器查询插件帮助\n\n📝 单服查询: cs [地址:端口]\n选项: -i 图片, -t 文本, -c 清除缓存\n\n🎯 批量查询: csss [地址1 地址2 ...]  (不指定地址则查询数据库列表)\n管理命令:\ncsss -l                查看数据库列表\ncsss -a <地址:端口>    添加服务器\ncsss -r <序号>         移除服务器\ncsss -c                清空数据库列表
 
-  // 批量查询服务器状态
+📋 状态: cs.status
+💡 默认端口27015，支持IPv6 (如 [::1]:27015)`)
+
   ctx.command('csss', '批量查询服务器状态')
-    .alias('batch')
-    .alias('multi')
     .alias('批量查询')
-    .option('list', '-l 显示配置的服务器列表', { type: Boolean, fallback: false })
-    .option('add', '-a <address> 添加服务器到列表', { type: String })
-    .option('remove', '-r <index> 从列表中移除服务器', { type: Number })
-    .option('clear', '-c 清空服务器列表', { type: Boolean, fallback: false })
-    .option('image', '-i 生成图片横幅', { type: Boolean, fallback: false })
-    .option('text', '-t 输出文本信息', { type: Boolean, fallback: false })
+    .option('list', '-l 显示配置的服务器列表')
+    .option('add', '-a <address:string> 添加服务器到列表')
+    .option('remove', '-r <index:number> 从列表中移除服务器')
+    .option('clear', '-c 清空服务器列表')
+    .option('image', '-i 生成图片横幅')
+    .option('text', '-t 输出文本信息')
     .action(async ({ session, options }, ...addresses) => {
-      // 显示配置的服务器列表
-      if (options.list) {
-        let listMessage = '📋 配置的服务器列表:\n'
-        config.serverList.forEach((server, index) => {
-          listMessage += `${index + 1}. ${server}\n`
-        })
-        return listMessage
+      if (options?.list) {
+        const list = await getServerList()
+        if (!list.length) return '📋 服务器列表为空，请使用 csss -a 地址:端口 添加'
+        return '📋 数据库中的服务器列表\n' + list.map((s, i) => `${i + 1}. ${s}`).join('\n')
       }
-
-      // 添加服务器到列表
-      if (options.add) {
+      if (options?.add !== undefined) {
+        if (typeof options.add !== 'string' || !options.add.trim()) return '❌ 请提供要添加的服务器地址\n正确用法：csss -a 127.0.0.1:27015'
         try {
           parseAddress(options.add)
-          config.serverList.push(options.add)
-          return `✅ 已添加服务器: ${options.add}\n当前列表: ${config.serverList.length} 个服务器`
-        } catch (error) {
-          return `❌ 添加失败: ${error.message}\n正确格式: 地址:端口 (例如: 127.0.0.1:27015)`
+          const added = await addServer(options.add)
+          if (!added) return `⚠️ 服务器 ${options.add} 已存在于列表中`
+          return `✅ 已添加服务器 ${options.add}\n当前列表 ${(await getServerList()).length} 个服务器`
+        } catch (error) { return `❌ 添加失败: ${(error as Error).message}` }
+      }
+      if (options?.remove !== undefined) {
+        const index = options.remove
+        if (typeof index !== 'number' || !Number.isInteger(index) || index < 1) {
+          return '❌ 请提供有效的服务器序号（正整数）'
         }
+        const success = await removeServerByIndex(options.remove)
+        if (success) return `✅ 已移除序号 ${options.remove}\n当前列表 ${(await getServerList()).length} 个服务器`
+        return `❌ 索引无效，请输入 1-${(await getServerList()).length} 之间的数字`
       }
+      if (options?.clear) { return `✅ 已清空服务器列表，共移除 ${await clearServers()} 个服务器` }
 
-      // 从列表中移除服务器
-      if (options.remove !== undefined) {
-        const index = options.remove - 1
-        if (index >= 0 && index < config.serverList.length) {
-          const removed = config.serverList.splice(index, 1)[0]
-          return `✅ 已移除服务器: ${removed}\n当前列表: ${config.serverList.length} 个服务器`
-        } else {
-          return `❌ 索引无效，请输入 1-${config.serverList.length} 之间的数字`
-        }
-      }
+      let serversToQuery: string[] = addresses.length > 0 ? addresses as string[] : await getServerList()
+      if (!serversToQuery.length) return '❌ 没有可查询的服务器\n请使用 csss -a 地址:端口 添加服务器\n或使用 csss 地址1 地址2 ... 临时查询'
 
-      // 清空服务器列表
-      if (options.clear) {
-        const count = config.serverList.length
-        config.serverList.length = 0
-        return `✅ 已清空服务器列表，共移除 ${count} 个服务器`
-      }
-
-      // 确定要查询的服务器列表
-      let serversToQuery: string[]
-      if (addresses.length > 0) {
-        serversToQuery = addresses
-      } else if (config.serverList.length > 0) {
-        serversToQuery = config.serverList
-      } else {
-        return '❌ 没有可查询的服务器\n请使用: csss -a <地址:端口> 添加服务器\n或使用: csss <地址1> <地址2> ... 临时查询'
-      }
-
-      // 限制最大查询数量
       const maxServers = 10
       if (serversToQuery.length > maxServers) {
         serversToQuery = serversToQuery.slice(0, maxServers)
-        session?.send(`⚠️ 服务器数量超过限制，仅查询前 ${maxServers} 个`)
+        if (session) session.send(`⚠️ 服务器数量超过限制，仅查询前 ${maxServers} 个`)
       }
 
       try {
         const { results, queryTime } = await queryServers(serversToQuery)
-        const shouldGenerateImage = options.image || (config.generateImage && !options.text)
+        const shouldGenImage = options?.image || (config.generateImage && !options?.text)
 
-        if (shouldGenerateImage) {
-          try {
-            const imageBuffer = await generateBatchImage(results, serversToQuery, queryTime)
-            return h.image(imageBuffer, 'image/png')
-          } catch (imageError) {
-            console.error('生成批量查询图片失败:', imageError)
-            // 失败后继续返回文本
-          }
+        if (shouldGenImage) {
+          try { return h.image(await renderToImage(generateBatchHTML(results, serversToQuery, queryTime)), 'image/png') }
+          catch (imgErr) { logger.error('生成批量查询图片失败', imgErr) }
         }
-
-        let message = generateTextTable(results, serversToQuery, queryTime, '批量查询结果')
-        message += '\n📋 输入 `cs <服务器地址>` 查询单个服务器'
-        return message
-      } catch (error) {
-        return `❌ 批量查询失败: ${error.message}`
-      }
+        return generateTextTable(results, serversToQuery, queryTime) + '\n📋 输入 `cs 服务器地址` 查询单个服务器'
+      } catch (error) { return `❌ 批量查询失败: ${(error as Error).message}` }
     })
 
-  // 插件卸载时清理资源
-  ctx.on('dispose', () => {
-    cache.clear()
-  })
+  ctx.on('dispose', () => cache.clear())
 }

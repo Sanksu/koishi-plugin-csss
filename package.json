@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-csss",
-  "description": "Check the status of the CS server",
-  "version": "2.1.0",
+  "description": "一个用于 Koishi 的 CS:GO / CS2 服务器状态查询插件，支持单个/批量查询、服务器列表管理，并可将结果渲染为图片",
+  "version": "3.1.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -36,7 +36,8 @@
     "service": {
       "required": [
         "puppeteer",
-        "gamedig"
+        "gamedig",
+        "database"
       ]
     }
   }
