@@ -1,6 +1,10 @@
 name: Publish
 
 on:
+  push:
+    paths-ignore:
+      - 'README.md'
+      - '**.md'
   workflow_dispatch:
 
 permissions:
@@ -16,18 +20,16 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
         env:
           DISABLE_V8_COMPILE_CACHE: 1
       - name: Install dependencies
-        run: npm install
+        run: yarn install --immutable
       - name: Build
-        run: npm run build
+        run: yarn build
       - name: Publish
         run: |
-          npm config set provenance true
-          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
-          npm publish --access public
+          npm publish --provenance --access public
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
