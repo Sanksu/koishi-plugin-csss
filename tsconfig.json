@@ -14,9 +14,10 @@
     "jsx": "react-jsx",
     "jsxImportSource": "@satorijs/element",
     "types": [
-      "node",
-      "yml-register/types"
-    ]
+      "node"
+    ],
+    "forceConsistentCasingInFileNames": true,
+    "strict": true
   },
   "include": [
     "src"
