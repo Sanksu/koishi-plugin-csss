@@ -10,13 +10,12 @@ export interface Config {
   cacheTime: number
   maxPlayers: number
   retryCount: number
-  showVAC: boolean
-  showPassword: boolean
   generateImage: boolean
   imageWidth: number
-  imageHeight: number // 注：实际作为 min-height 使用
+  imageHeight: number             // 注：实际作为 min-height 使用
   fontFamily: string
-  customCSS: string
+  customHTML: string      // 自定义单个服务器 HTML 模板
+  customBatchHTML: string // 自定义批量查询 HTML 模板
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -24,14 +23,12 @@ export const Config: Schema<Config> = Schema.object({
   cacheTime: Schema.number().min(0).max(300000).default(3000).description('缓存时间(毫秒，0为禁用缓存)'),
   maxPlayers: Schema.number().min(0).max(100).default(20).description('最大显示玩家数'),
   retryCount: Schema.number().min(0).max(5).default(1).description('查询失败重试次数'),
-  showVAC: Schema.boolean().default(true).description('是否显示VAC状态'),
-  showPassword: Schema.boolean().default(true).description('是否显示密码保护信息'),
   generateImage: Schema.boolean().default(true).description('是否生成图片横幅（影响cs和csss命令）'),
   imageWidth: Schema.number().min(600).max(2000).default(1200).description('图片宽度(像素)'),
   imageHeight: Schema.number().min(200).max(2500).default(500).description('图片最小高度(像素)，实际高度会根据内容自适应'),
-  // 移除 fontSize 配置项
   fontFamily: Schema.string().default('JetBrains Mono, monospace').description('字体'),
-  customCSS: Schema.string().role('textarea').description('自定义CSS样式，可通过此配置调整字体大小等').default(''),
+  customHTML: Schema.string().role('textarea').description('自定义单个服务器查询的HTML模板，支持占位符：{{SERVER_NAME}}, {{MAP}}, {{PLAYERS_COUNT}}, {{MAX_PLAYERS}}, {{BOT_COUNT}}, {{PING}}, {{HOST}}, {{PORT}}, {{PLAYERS_LIST}}, {{TIMESTAMP}}').default(''),
+  customBatchHTML: Schema.string().role('textarea').description('自定义批量查询的HTML模板，支持占位符：{{TOTAL}}, {{SUCCESSFUL}}, {{QUERY_TIME}}, {{SERVERS_LIST}}, {{TIMESTAMP}}').default(''),
 })
 
 // 类型定义
@@ -254,10 +251,8 @@ export function apply(ctx: Context, config: Config) {
       r.name ? `🏷️ 名称 ${utils.cleanName(r.name)}` : null,
       r.map ? `🗺️ 地图 ${r.map}` : null,
       `👥 玩家 ${r.players.length}/${r.maxplayers}${r.bots.length ? ` (${r.bots.length} Bot)` : ''}`,
-      config.showPassword && r.password !== undefined ? `🔒 密码 ${r.password ? '是 🔐' : '否 🔓'}` : null,
       r.ping ? `📶 Ping ${utils.formatPing(r.ping)}` : null,
       r.connect ? `🔗 连接 ${r.connect}` : `📍 地址 ${r.host || '未知'}:${r.port || '未知'}`,
-      config.showVAC && r.raw?.secure !== undefined ? `🛡️ VAC ${r.raw.secure ? '启用 ✅' : '关闭 ❌'}` : null,
     ]
     return lines.filter(Boolean).join('\n')
   }
@@ -285,7 +280,7 @@ export function apply(ctx: Context, config: Config) {
         color: #71717a; 
         position: relative; 
         border: 2px solid #2e2e33; 
-        font-size: 24px; /* 基础字体大小，原 fontSize 默认值 */
+        font-size: 24px;
       }
       .corner { position: absolute; width: 25px; height: 25px; border-color: #fbbf24; border-style: solid; border-width: 0; }
       .corner-tl { top: 2px; left: 2px; border-top-width: 3px; border-left-width: 3px; }
@@ -294,33 +289,38 @@ export function apply(ctx: Context, config: Config) {
       .corner-br { bottom: 2px; right: 2px; border-bottom-width: 3px; border-right-width: 3px; }
       .divider { height: 2px; background: #2e2e33; margin: 20px 0; }
       .timestamp { margin-top: 30px; font-size: 0.8em; color: #666666; text-align: left; }
-      ${config.customCSS ? `\n/* 用户自定义样式 */\n${config.customCSS}\n` : ''}
     `
   }
 
-  function generateServerHTML(data: ServerQueryData, host: string, port: number): string {
-    const r = data.result
-    const pCount = r.players.length
-    let playersHTML = ''
-
+  // 生成玩家列表 HTML
+  function buildPlayersListHTML(players: GamedigPlayer[]): string {
+    const pCount = players.length
     if (pCount === 0) {
-      playersHTML = `<div class="player-row" style="color: #aaaaaa;">服务器当前无玩家在线</div>`
-    } else {
-      const sorted = [...r.players].sort((a, b) => utils.cleanName(a.name).localeCompare(utils.cleanName(b.name))).slice(0, config.maxPlayers)
-      const isTwoCols = pCount > 10
-
-      if (isTwoCols) {
-        const half = Math.ceil(sorted.length / 2)
-        const renderCol = (arr: typeof sorted) => arr.map(p => `<div class="player-row">${utils.escapeHtml(utils.truncateText(utils.cleanName(p.name), 20))}</div>`).join('')
-        playersHTML = `<div style="display: flex; gap: 40px;"><div>${renderCol(sorted.slice(0, half))}</div><div>${renderCol(sorted.slice(half))}</div></div>`
-      } else {
-        playersHTML = sorted.map(p => `<div class="player-row">${utils.escapeHtml(utils.truncateText(utils.cleanName(p.name), 20))}</div>`).join('')
-      }
-      if (pCount > config.maxPlayers) {
-        playersHTML += `<div class="player-row" style="color: #aaaaaa; font-style: italic;">... 还有 ${pCount - config.maxPlayers} 位玩家未显示</div>`
-      }
+      return `<div class="player-row" style="color: #aaaaaa;">服务器当前无玩家在线</div>`
     }
+    const sorted = [...players].sort((a, b) => utils.cleanName(a.name).localeCompare(utils.cleanName(b.name))).slice(0, config.maxPlayers)
+    const isTwoCols = pCount > 10
+    if (isTwoCols) {
+      const half = Math.ceil(sorted.length / 2)
+      const renderCol = (arr: typeof sorted) => arr.map(p => `<div class="player-row">${utils.escapeHtml(utils.truncateText(utils.cleanName(p.name), 20))}</div>`).join('')
+      let html = `<div style="display: flex; gap: 40px;"><div>${renderCol(sorted.slice(0, half))}</div><div>${renderCol(sorted.slice(half))}</div></div>`
+      if (pCount > config.maxPlayers) {
+        html += `<div class="player-row" style="color: #aaaaaa; font-style: italic;">... 还有 ${pCount - config.maxPlayers} 位玩家未显示</div>`
+      }
+      return html
+    } else {
+      let html = sorted.map(p => `<div class="player-row">${utils.escapeHtml(utils.truncateText(utils.cleanName(p.name), 20))}</div>`).join('')
+      if (pCount > config.maxPlayers) {
+        html += `<div class="player-row" style="color: #aaaaaa; font-style: italic;">... 还有 ${pCount - config.maxPlayers} 位玩家未显示</div>`
+      }
+      return html
+    }
+  }
 
+  // 生成单个服务器默认 HTML
+  function generateDefaultServerHTML(data: ServerQueryData, host: string, port: number): string {
+    const r = data.result
+    const playersHTML = buildPlayersListHTML(r.players)
     return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
       ${getBaseCSS()}
       .title { text-align: center; font-size: 1.5em; color: #71717a; margin-bottom: 20px; }
@@ -335,13 +335,37 @@ export function apply(ctx: Context, config: Config) {
       <div class="server-name">${utils.escapeHtml(utils.cleanName(r.name || '未知服务器'))}</div>
       <div class="divider"></div>
       <div class="info-row"><span>地图: ${utils.escapeHtml(r.map || '未知')}</span><span>IP: ${utils.escapeHtml(`${host}:${port}`)}</span></div>
-      <div class="info-row"><span style="color: ${utils.getPlayerColor(pCount)};">人数: ${pCount}/${r.maxplayers}${r.bots.length ? ` (${r.bots.length} Bot)` : ''}</span><span style="color: ${utils.getPingColor(r.ping)};">Ping: ${r.ping ? r.ping + 'ms' : '未知'}</span></div>
+      <div class="info-row"><span style="color: ${utils.getPlayerColor(r.players.length)};">人数: ${r.players.length}/${r.maxplayers}${r.bots.length ? ` (${r.bots.length} Bot)` : ''}</span><span style="color: ${utils.getPingColor(r.ping)};">Ping: ${r.ping ? r.ping + 'ms' : '未知'}</span></div>
       <div class="player-section"><div class="player-section-title">在线玩家</div><div class="divider" style="margin: 5px 0 15px;"></div>${playersHTML}</div>
       <div class="timestamp">查询时间: ${new Date().toLocaleString('zh-CN')}</div>
     </body></html>`
   }
 
-  function generateBatchHTML(results: SingleQueryResult[], serversToQuery: string[], queryTime: number): string {
+  // 使用自定义模板渲染单个服务器 HTML
+  function renderCustomServerHTML(data: ServerQueryData, host: string, port: number, template: string): string {
+    const r = data.result
+    const playersListHTML = buildPlayersListHTML(r.players)
+    const replacements: Record<string, string> = {
+      '{{SERVER_NAME}}': utils.escapeHtml(utils.cleanName(r.name || '未知服务器')),
+      '{{MAP}}': utils.escapeHtml(r.map || '未知'),
+      '{{PLAYERS_COUNT}}': r.players.length.toString(),
+      '{{MAX_PLAYERS}}': r.maxplayers.toString(),
+      '{{BOT_COUNT}}': r.bots.length.toString(),
+      '{{PING}}': r.ping ? r.ping.toString() : '未知',
+      '{{HOST}}': utils.escapeHtml(host),
+      '{{PORT}}': port.toString(),
+      '{{PLAYERS_LIST}}': playersListHTML,
+      '{{TIMESTAMP}}': new Date().toLocaleString('zh-CN'),
+    }
+    let html = template
+    for (const [placeholder, value] of Object.entries(replacements)) {
+      html = html.split(placeholder).join(value)
+    }
+    return html
+  }
+
+  // 生成批量查询默认 HTML
+  function generateDefaultBatchHTML(results: SingleQueryResult[], serversToQuery: string[], queryTime: number): string {
     const successful = results.filter(r => r.success).length
     let serversHTML = results.map((result, index) => {
       if (result.success && result.data) {
@@ -383,6 +407,41 @@ export function apply(ctx: Context, config: Config) {
     </body></html>`
   }
 
+  // 生成批量查询服务器列表 HTML
+  function buildServersListHTML(results: SingleQueryResult[], serversToQuery: string[]): string {
+    return results.map((result, index) => {
+      if (result.success && result.data) {
+        const d = result.data.result
+        return `<div class="server-item">
+          <div class="server-header"><span class="server-index">${index + 1}.</span><span class="server-name">${utils.escapeHtml(utils.cleanName(d.name || '未知'))}</span><span class="server-players" style="color: ${utils.getPlayerColor(d.players.length)};">${d.players.length}/${d.maxplayers}</span></div>
+          <div class="server-details"><span class="server-addr">${utils.escapeHtml(serversToQuery[index])}</span></div>
+          <div class="server-details"><span class="server-map">地图: ${utils.escapeHtml(d.map || '')}</span><span class="server-ping" style="color: ${utils.getPingColor(d.ping)};">延迟: ${d.ping}ms</span></div>
+        </div>`
+      }
+      return `<div class="server-item error">
+        <div class="server-header"><span class="server-index">${index + 1}.</span><span class="server-name">${utils.escapeHtml(serversToQuery[index])}</span><span class="server-status">❌ 查询失败</span></div>
+        <div class="server-details error-msg">${utils.escapeHtml(result.error || '未知错误')}</div>
+      </div>`
+    }).join('')
+  }
+
+  function renderCustomBatchHTML(results: SingleQueryResult[], serversToQuery: string[], queryTime: number, template: string): string {
+    const successful = results.filter(r => r.success).length
+    const serversListHTML = buildServersListHTML(results, serversToQuery)
+    const replacements: Record<string, string> = {
+      '{{TOTAL}}': results.length.toString(),
+      '{{SUCCESSFUL}}': successful.toString(),
+      '{{QUERY_TIME}}': utils.formatTime(queryTime),
+      '{{SERVERS_LIST}}': serversListHTML,
+      '{{TIMESTAMP}}': new Date().toLocaleString('zh-CN'),
+    }
+    let html = template
+    for (const [placeholder, value] of Object.entries(replacements)) {
+      html = html.split(placeholder).join(value)
+    }
+    return html
+  }
+
   async function renderToImage(html: string): Promise<Buffer> {
     const page = await ctx.puppeteer.page()
     try {
@@ -411,7 +470,13 @@ export function apply(ctx: Context, config: Config) {
 
         if (shouldGenImage) {
           try {
-            return h.image(await renderToImage(generateServerHTML(data, host, port)), 'image/png')
+            let html: string
+            if (config.customHTML && config.customHTML.trim()) {
+              html = renderCustomServerHTML(data, host, port, config.customHTML)
+            } else {
+              html = generateDefaultServerHTML(data, host, port)
+            }
+            return h.image(await renderToImage(html), 'image/png')
           } catch (imgErr) {
             logger.error('生成图片失败', imgErr)
             return `生成图片失败，已转为文本输出。\n\n${formatServerInfo(data)}\n\n${formatPlayers(data.result.players)}`
@@ -438,10 +503,7 @@ export function apply(ctx: Context, config: Config) {
     })
 
   ctx.command('cs.help', '查看帮助')
-    .action(() => `🔫 CS服务器查询插件帮助\n\n📝 单服查询: cs [地址:端口]\n选项: -i 图片, -t 文本, -c 清除缓存\n\n🎯 批量查询: csss [地址1 地址2 ...]  (不指定地址则查询数据库列表)\n管理命令:\ncsss -l                查看数据库列表\ncsss -a <地址:端口>    添加服务器\ncsss -r <序号>         移除服务器\ncsss -c                清空数据库列表
-
-📋 状态: cs.status
-💡 默认端口27015，支持IPv6 (如 [::1]:27015)`)
+    .action(() => `🔫 CS服务器查询插件帮助\n\n📝 单服查询: cs [地址:端口]\n选项: -i 图片, -t 文本, -c 清除缓存\n\n🎯 批量查询: csss [地址1 地址2 ...]  (不指定地址则查询数据库列表)\n管理命令:\ncsss -l                查看数据库列表\ncsss -a <地址:端口>    添加服务器\ncsss -r <序号>         移除服务器\ncsss -c                清空数据库列表\n\n📋 状态: cs.status\n💡 默认端口27015，支持IPv6 (如 [::1]:27015)`)
 
   ctx.command('csss', '批量查询服务器状态')
     .alias('批量查询')
@@ -491,8 +553,17 @@ export function apply(ctx: Context, config: Config) {
         const shouldGenImage = options?.image || (config.generateImage && !options?.text)
 
         if (shouldGenImage) {
-          try { return h.image(await renderToImage(generateBatchHTML(results, serversToQuery, queryTime)), 'image/png') }
-          catch (imgErr) { logger.error('生成批量查询图片失败', imgErr) }
+          try {
+            let html: string
+            if (config.customBatchHTML && config.customBatchHTML.trim()) {
+              html = renderCustomBatchHTML(results, serversToQuery, queryTime, config.customBatchHTML)
+            } else {
+              html = generateDefaultBatchHTML(results, serversToQuery, queryTime)
+            }
+            return h.image(await renderToImage(html), 'image/png')
+          } catch (imgErr) {
+            logger.error('生成批量查询图片失败', imgErr)
+          }
         }
         return generateTextTable(results, serversToQuery, queryTime) + '\n📋 输入 `cs 服务器地址` 查询单个服务器'
       } catch (error) { return `❌ 批量查询失败: ${(error as Error).message}` }

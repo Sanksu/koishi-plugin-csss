@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/koishi-plugin-csss?style=flat-square)](https://www.npmjs.com/package/koishi-plugin-csss)
 
-cs server status - 一个用于 Koishi 的 CS:GO / CS2 服务器状态查询插件，支持单个/批量查询、服务器列表管理，并可将结果渲染为图片。
+cs server status - 一个用于 Koishi 的 CS1.6 / CSS / CS:GO / CS2 服务器状态查询插件，支持单个/批量查询、服务器列表管理，并可将结果渲染为图片。
 
 ## 功能
 
@@ -14,8 +14,8 @@ cs server status - 一个用于 Koishi 的 CS:GO / CS2 服务器状态查询插�
 
 本插件强依赖以下插件，请确保它们已安装并启用：
 
-- `koishi-plugin-gamedig`：用于查询 Source 引擎服务器。
-- `koishi-plugin-puppeteer`：用于将 HTML 渲染为图片。
+- [`koishi-plugin-gamedig`](https://www.npmjs.com/package/koishi-plugin-gamedig) – 查询 Source 引擎服务器
+- [`koishi-plugin-puppeteer`](https://www.npmjs.com/package/koishi-plugin-puppeteer) – 将 HTML 渲染为图片
 - `database`：用于存储服务器列表。
 
 ## 命令列表
@@ -92,11 +92,95 @@ csss -r 1                       #从数据库列表中移除序号为1的服务�
 csss -c                         #清空数据库中的服务器列表
 ```
 
+> 批量查询最多支持 10 个服务器，超出时仅查询前 10 个并给出提示。
+
 ## 自定义样式指南
 
-`koishi-plugin-csss` 支持通过 `customCSS` 配置项注入自定义 CSS，让您能自由调整生成图片的视觉效果。本指南将说明可用的 HTML 结构、类名和修改示例。
+`koishi-plugin-csss` 支持通过 `customHTML` 和 `customBatchHTML` 配置项自定义服务器状态图片的 HTML 结构和样式，从而打造符合自己风格的展示效果。本指南将说明可用的 HTML 结构、类名和修改示例。
 
-### HTML 结构概览
+### 1. 单个服务器查询模板 (`customHTML`)
+
+当用户执行 `cs <地址>` 命令并生成图片时，插件会使用此模板渲染 HTML。
+
+| 占位符 | 说明 | 示例值 |
+|--------|------|--------|
+| `{{SERVER_NAME}}` | 服务器名称（过滤特殊字符） | `HNS \| 身法躲猫猫` |
+| `{{MAP}}` | 当前地图名称 | `hns_bbcity` |
+| `{{PLAYERS_COUNT}}` | 当前玩家人数 | `4` |
+| `{{MAX_PLAYERS}}` | 服务器最大玩家数 | `20` |
+| `{{BOT_COUNT}}` | Bot 数量 | `2` |
+| `{{PING}}` | 服务器延迟（毫秒） | `35` |
+| `{{HOST}}` | 服务器 IP 或域名 | `127.0.0.1` |
+| `{{PORT}}` | 端口号 | `27015` |
+| `{{PLAYERS_LIST}}` | 玩家列表 HTML（自动生成，见下方说明） | - |
+| `{{TIMESTAMP}}` | 当前查询时间（本地化格式） | `2026/4/21 23:30:25` |
+
+### {{PLAYERS_LIST}} 生成的结构
+
+
+无玩家时：
+
+```html
+<div class="player-row" style="color: #aaaaaa;">服务器当前无玩家在线</div>
+```
+
+有玩家时（玩家数超过 10 人会自动分为两列显示，通过 display: flex 布局）：
+
+```html
+<div class="player-row">Player1</div>
+<div class="player-row">Player2</div>
+<!-- 超过 maxPlayers 时追加 -->
+<div class="player-row" style="color: #aaaaaa; font-style: italic;">... 还有 N 位玩家未显示</div>
+```
+
+
+### 2. 批量查询模板 (customBatchHTML)
+
+当用户执行 csss 命令（不带地址参数，查询数据库列表）并生成图片时使用。
+
+| 占位符 | 说明 | 示例值 |
+|--------|------|--------|
+| `{{TOTAL}}` | 查询的服务器总数 | `5` |
+| `{{SUCCESSFUL}}` | 成功查询的服务器数量 | `3` |
+| `{{QUERY_TIME}}` | 批量查询总耗时（格式化） | `1.2秒 或 350ms` |
+| `{{SERVERS_LIST}}` | 服务器列表 HTML（自动生成，见下方说明） | - |
+| `{{TIMESTAMP}}` | 当前查询时间（本地化格式） | `2026/4/21 23:30:25` |
+
+### {{SERVERS_LIST}} 生成的结构
+
+每个服务器会生成如下 HTML（成功时）：
+
+```html
+<div class="server-item">
+  <div class="server-header">
+    <span class="server-index">1.</span>
+    <span class="server-name">HNS | 身法躲猫猫</span>
+    <span class="server-players">4/20</span>
+  </div>
+  <div class="server-details">
+    <span class="server-addr">127.0.0.1:27015</span>
+  </div>
+  <div class="server-details">
+    <span class="server-map">地图: hns_bbcity</span>
+    <span class="server-ping">延迟: 35ms</span>
+  </div>
+</div>
+```
+
+查询失败时：
+
+```html
+<div class="server-item error">
+  <div class="server-header">
+    <span class="server-index">2.</span>
+    <span class="server-name">127.0.0.1:27015</span>
+    <span class="server-status">❌ 查询失败</span>
+  </div>
+  <div class="server-details error-msg">连接超时</div>
+</div>
+```
+
+### 默认HTML模板结构参考
 
 ### 单个服务器查询 (cs)
 
@@ -137,17 +221,14 @@ csss -c                         #清空数据库中的服务器列表
 
 ```html
 <body>
-  <!-- 四角边框装饰 -->
-  <div class="corner corner-tl"></div> ...
-  
+  <div class="corner corner-tl"></div>
+  <!-- ... 其余三角 ... -->
   <div class="title">[服务器状态批量查询]</div>
   <div class="stats">
     <span>查询时间: ...</span>
     <span>耗时: 2.1秒 | 成功: 3/5</span>
   </div>
   <div class="divider"></div>
-  
-  <!-- 每个服务器一个 item -->
   <div class="server-item">
     <div class="server-header">
       <span class="server-index">1.</span>
@@ -162,8 +243,7 @@ csss -c                         #清空数据库中的服务器列表
       <span class="server-map">地图: de_dust2</span>
     </div>
   </div>
-  
-  <!-- 查询失败的条目 -->
+  <!-- 失败条目 -->
   <div class="server-item error">
     <div class="server-header">
       <span class="server-index">2.</span>
@@ -172,7 +252,6 @@ csss -c                         #清空数据库中的服务器列表
     </div>
     <div class="server-details error-msg">连接超时</div>
   </div>
-  
   <div class="timestamp">📋 输入 `cs 服务器地址` 查询单个服务器</div>
 </body>
 ```
