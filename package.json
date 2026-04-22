@@ -9,10 +9,10 @@
     "dist"
   ],
   "license": "MIT",
-  "homepage": "https://github.com/sanksu/koishi-plugin-csss",
+  "homepage": "https://github.com/Sanksu/koishi-plugin-csss",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sanksu/koishi-plugin-csss.git"
+    "url": "https://github.com/Sanksu/koishi-plugin-csss"
   },
   "keywords": [
     "chatbot",
