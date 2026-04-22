@@ -19,15 +19,35 @@
     "koishi",
     "plugin"
   ],
+  "scripts": {
+    "build": "yakumo build",
+    "bump": "yakumo version",
+    "dep": "yakumo upgrade",
+    "pub": "yakumo publish"
+  },
   "devDependencies": {
+    "esbuild": "^0.23.1",
+    "esbuild-register": "^3.5.0",
+    "mocha": "^9.2.2",
+    "typescript": "^5.1.6",
     "koishi": "^4.18.7",
+    "koishi-plugin-gamedig": "^1.2.2",
     "koishi-plugin-puppeteer": "^3.9.0",
-    "koishi-plugin-gamedig": "^1.2.2"
+    "yakumo": "^0.3.10",
+    "yakumo-esbuild": "^0.3.26",
+    "yakumo-esbuild-yaml": "^0.3.1",
+    "yakumo-mocha": "^0.3.1",
+    "yakumo-publish": "^0.3.10",
+    "yakumo-publish-sync": "^0.3.3",
+    "yakumo-tsc": "^0.3.12",
+    "yakumo-upgrade": "^0.3.6",
+    "yakumo-version": "^0.3.4",
+    "yml-register": "^1.2.5"
   },
   "peerDependencies": {
     "koishi": "^4.18.7",
-    "koishi-plugin-puppeteer": "^3.9.0",
-    "koishi-plugin-gamedig": "^1.2.2"
+    "koishi-plugin-gamedig": "^1.2.2",
+    "koishi-plugin-puppeteer": "^3.9.0"
   },
   "koishi": {
     "description": {
@@ -40,8 +60,5 @@
         "database"
       ]
     }
-  },
-  "scripts": {
-    "build": "tsc"
   }
 }

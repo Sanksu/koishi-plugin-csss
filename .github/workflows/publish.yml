@@ -18,18 +18,13 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: '20'
           registry-url: 'https://registry.npmjs.org'
-          auth-token: ${{ secrets.NPM_TOKEN }}
       - name: Install
         run: yarn --no-immutable
       - name: Build
         run: yarn build
       - name: Publish
-        run: |-
-          yarn config set npmPublishProvenance true
-          yarn config set npmRegistryServer https://registry.npmjs.org/
-          yarn pub --debug
+        run: yarn publish
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
