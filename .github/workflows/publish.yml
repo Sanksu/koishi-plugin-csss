@@ -15,14 +15,21 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
           auth-token: ${{ secrets.NPM_TOKEN }}
-      - run: yarn install --immutable
-      - run: yarn build
-      - run: npm publish --provenance --access public
+      - name: Install
+        run: yarn --no-immutable
+      - name: Build
+        run: yarn build
+      - name: Publish
+        run: |-
+          yarn config set npmPublishProvenance true
+          yarn config set npmRegistryServer https://registry.npmjs.org/
+          yarn pub --debug
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
