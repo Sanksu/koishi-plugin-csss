@@ -13,7 +13,6 @@ export interface Config {
   generateImage: boolean
   imageWidth: number
   imageHeight: number             // 注：实际作为 min-height 使用
-  fontFamily: string
   customHTML: string      // 自定义单个服务器 HTML 模板
   customBatchHTML: string // 自定义批量查询 HTML 模板
 }
@@ -26,7 +25,6 @@ export const Config: Schema<Config> = Schema.object({
   generateImage: Schema.boolean().default(true).description('是否生成图片横幅（影响cs和csss命令）'),
   imageWidth: Schema.number().min(600).max(2000).default(1200).description('图片宽度(像素)'),
   imageHeight: Schema.number().min(200).max(2500).default(500).description('图片最小高度(像素)，实际高度会根据内容自适应'),
-  fontFamily: Schema.string().default('JetBrains Mono, monospace').description('字体'),
   customHTML: Schema.string().role('textarea').description('自定义单个服务器查询的HTML模板，支持占位符：{{SERVER_NAME}}, {{MAP}}, {{PLAYERS_COUNT}}, {{MAX_PLAYERS}}, {{BOT_COUNT}}, {{PING}}, {{HOST}}, {{PORT}}, {{PLAYERS_LIST}}, {{TIMESTAMP}}').default(''),
   customBatchHTML: Schema.string().role('textarea').description('自定义批量查询的HTML模板，支持占位符：{{TOTAL}}, {{SUCCESSFUL}}, {{QUERY_TIME}}, {{SERVERS_LIST}}, {{TIMESTAMP}}').default(''),
 })
@@ -269,34 +267,14 @@ export function apply(ctx: Context, config: Config) {
 
   // 基础 CSS
   function getBaseCSS(): string {
-    return `
-      * { margin: 0; padding: 0; box-sizing: border-box; }
-      body { 
-        background: #1c1c1fcc; 
-        font-family: ${config.fontFamily}; 
-        width: ${config.imageWidth}px; 
-        min-height: ${config.imageHeight}px; 
-        padding: 40px; 
-        color: #71717a; 
-        position: relative; 
-        border: 2px solid #2e2e33; 
-        font-size: 24px;
-      }
-      .corner { position: absolute; width: 25px; height: 25px; border-color: #fbbf24; border-style: solid; border-width: 0; }
-      .corner-tl { top: 2px; left: 2px; border-top-width: 3px; border-left-width: 3px; }
-      .corner-tr { top: 2px; right: 2px; border-top-width: 3px; border-right-width: 3px; }
-      .corner-bl { bottom: 2px; left: 2px; border-bottom-width: 3px; border-left-width: 3px; }
-      .corner-br { bottom: 2px; right: 2px; border-bottom-width: 3px; border-right-width: 3px; }
-      .divider { height: 2px; background: #2e2e33; margin: 20px 0; }
-      .timestamp { margin-top: 30px; font-size: 0.8em; color: #666666; text-align: left; }
-    `
+    return `:root{--ink:#eef2f5;--ink-dim:#b7bdc7;--line-strong:#d5dae1;--panel:rgba(15,18,24,0.56)}*{box-sizing:border-box}html,body{width:100%;min-height:100%}body{margin:0;color:var(--ink);font-family:"Chakra Petch","Noto Sans SC",sans-serif;background:radial-gradient(circle at 12% 18%,#1f242e 0,transparent 46%),radial-gradient(circle at 84% 92%,#171b24 0,transparent 42%),linear-gradient(160deg,#050607 0%,#0a0d12 48%,#060708 100%);overflow-x:hidden}.atmosphere{position:absolute;inset:0;pointer-events:none;z-index:0;background:repeating-linear-gradient(90deg,rgba(174,181,190,0.08) 0,rgba(174,181,190,0.08) 1px,transparent 1px,transparent 62px),repeating-linear-gradient(0deg,rgba(174,181,190,0.05) 0,rgba(174,181,190,0.05) 1px,transparent 1px,transparent 62px)}.shell{position:relative;z-index:8;width:min(1000px,92vw);margin:0 auto;padding:clamp(42px,8.4vh,78px) 0 52px}.hero{margin-bottom:22px;max-width:980px}.eyebrow{margin:0 0 9px;font-family:"Orbitron",sans-serif;letter-spacing:0.19em;font-size:clamp(0.68rem,1.1vw,0.82rem);color:var(--ink-dim)}.hero-title-wrap{display:flex;align-items:flex-start;gap:12px}.brand-stack{display:flex;flex-direction:column;gap:2px}.hero h1{margin:0;font-family:"Orbitron",sans-serif;font-size:clamp(1.05rem,2vw,1.4rem);letter-spacing:0.08em;line-height:1.2;text-shadow:0 0 12px rgba(204,212,224,0.18)}.server-grid{display:grid;gap:14px}.server-item{border:1px solid rgba(205,213,221,0.32);background:linear-gradient(145deg,rgba(255,255,255,0.09),rgba(255,255,255,0.01)),var(--panel);padding:15px 16px 16px;position:relative;overflow:hidden;box-shadow:inset 0 0 0 1px rgba(255,255,255,0.09),0 10px 32px rgba(0,0,0,0.35)}.server-item .server-header{margin:0;font-family:"Orbitron",sans-serif;font-size:clamp(0.88rem,1.45vw,1rem);font-weight:600;letter-spacing:0.04em;line-height:1.38;overflow-wrap:anywhere}.server-item .server-header .server-players{float:right}.server-item .server-ping{float:right}.border{margin-top:12px;border-top:1px solid rgba(220,229,240,0.2)}.server-addr{margin:10px 0 8px;color:var(--line-strong);font-size:clamp(0.9rem,1.4vw,1rem);letter-spacing:0.02em;word-break:break-all;display:block}.site-footer{margin-top:20px;padding-top:12px;border-top:1px solid rgba(220,229,240,0.2)}.site-footer p{margin:0;color:var(--ink-dim);font-size:0.92rem;letter-spacing:0.05em}.site-footer .footer-note{margin-top:8px;font-size:0.84rem;line-height:1.6;color:rgba(197,206,217,0.95)}`
   }
 
   // 生成玩家列表 HTML
   function buildPlayersListHTML(players: GamedigPlayer[]): string {
     const pCount = players.length
     if (pCount === 0) {
-      return `<div class="player-row" style="color: #aaaaaa;">服务器当前无玩家在线</div>`
+      return `<div class="player-row">服务器当前无玩家在线</div>`
     }
     const sorted = [...players].sort((a, b) => utils.cleanName(a.name).localeCompare(utils.cleanName(b.name))).slice(0, config.maxPlayers)
     const isTwoCols = pCount > 10
@@ -305,13 +283,13 @@ export function apply(ctx: Context, config: Config) {
       const renderCol = (arr: typeof sorted) => arr.map(p => `<div class="player-row">${utils.escapeHtml(utils.truncateText(utils.cleanName(p.name), 20))}</div>`).join('')
       let html = `<div style="display: flex; gap: 40px;"><div>${renderCol(sorted.slice(0, half))}</div><div>${renderCol(sorted.slice(half))}</div></div>`
       if (pCount > config.maxPlayers) {
-        html += `<div class="player-row" style="color: #aaaaaa; font-style: italic;">... 还有 ${pCount - config.maxPlayers} 位玩家未显示</div>`
+        html += `<div class="player-row">... 还有 ${pCount - config.maxPlayers} 位玩家未显示</div>`
       }
       return html
     } else {
       let html = sorted.map(p => `<div class="player-row">${utils.escapeHtml(utils.truncateText(utils.cleanName(p.name), 20))}</div>`).join('')
       if (pCount > config.maxPlayers) {
-        html += `<div class="player-row" style="color: #aaaaaa; font-style: italic;">... 还有 ${pCount - config.maxPlayers} 位玩家未显示</div>`
+        html += `<div class="player-row">... 还有 ${pCount - config.maxPlayers} 位玩家未显示</div>`
       }
       return html
     }
@@ -321,24 +299,7 @@ export function apply(ctx: Context, config: Config) {
   function generateDefaultServerHTML(data: ServerQueryData, host: string, port: number): string {
     const r = data.result
     const playersHTML = buildPlayersListHTML(r.players)
-    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
-      ${getBaseCSS()}
-      .title { text-align: center; font-size: 1.5em; color: #71717a; margin-bottom: 20px; }
-      .server-name { text-align: center; font-size: 1.8em; font-weight: bold; color: #fbbf24; margin: 10px 0 20px; word-break: break-word; }
-      .info-row { display: flex; justify-content: space-between; margin: 15px 0; font-size: 1em; }
-      .player-section { margin-top: 20px; }
-      .player-section-title { font-size: 1em; font-weight: bold; color: #fcf8de; margin-bottom: 10px; }
-      .player-row { font-size: 0.9em; color: #dddddd; line-height: 1.8; }
-    </style></head><body>
-      <div class="corner corner-tl"></div><div class="corner corner-tr"></div><div class="corner corner-bl"></div><div class="corner corner-br"></div>
-      <div class="title">[服务器状态查询]</div>
-      <div class="server-name">${utils.escapeHtml(utils.cleanName(r.name || '未知服务器'))}</div>
-      <div class="divider"></div>
-      <div class="info-row"><span>地图: ${utils.escapeHtml(r.map || '未知')}</span><span>IP: ${utils.escapeHtml(`${host}:${port}`)}</span></div>
-      <div class="info-row"><span style="color: ${utils.getPlayerColor(r.players.length)};">人数: ${r.players.length}/${r.maxplayers}${r.bots.length ? ` (${r.bots.length} Bot)` : ''}</span><span style="color: ${utils.getPingColor(r.ping)};">Ping: ${r.ping ? r.ping + 'ms' : '未知'}</span></div>
-      <div class="player-section"><div class="player-section-title">在线玩家</div><div class="divider" style="margin: 5px 0 15px;"></div>${playersHTML}</div>
-      <div class="timestamp">查询时间: ${new Date().toLocaleString('zh-CN')}</div>
-    </body></html>`
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${getBaseCSS()}.server-grid{grid-template-columns:1fr}.player-row{margin-top:12px;font-size:0.9rem;color:#aaaaaa}</style></head><body><div class="atmosphere"aria-hidden="true"></div><main class="shell"><header class="hero"><p class="eyebrow">SERVER STATUS</p><div class="hero-title-wrap"><div class="brand-stack"><h1>服务器状态</h1></div></div></header><section class="server-grid"><div class="server-item"><div class="server-header"><span class="server-name">${utils.escapeHtml(utils.cleanName(r.name || '未知服务器'))}</span><span class="server-players"style="color: ${utils.getPlayerColor(r.players.length)};">${r.players.length}/${r.maxplayers}${r.bots.length ? `(${r.bots.length}Bot)` : ''}</span></div><div class="server-details"><span class="server-addr">IP:${utils.escapeHtml(host)}</span></div><div class="server-details"><span class="server-map">地图:${utils.escapeHtml(r.map || '未知')}</span><span class="server-ping"style="color: ${utils.getPingColor(r.ping)};">延迟:${r.ping ? r.ping + 'ms' : '未知'}</span></div><div class="border"></div>${playersHTML}</section><footer class="site-footer"aria-label="社区信息"><p class="footer-note">查询时间：${new Date().toLocaleString()}</p></footer></main></body></html>`
   }
 
   // 使用自定义模板渲染单个服务器 HTML
@@ -382,29 +343,7 @@ export function apply(ctx: Context, config: Config) {
       </div>`
     }).join('')
 
-    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
-      ${getBaseCSS()}
-      .title { text-align: center; font-size: 1.8em; color: #71717a; margin-bottom: 20px; font-weight: bold; }
-      .stats { display: flex; justify-content: space-between; font-size: 1em; margin-bottom: 10px; }
-      .divider { background: #FFD700; margin: 15px 0 30px; }
-      .server-item { margin-bottom: 30px; border-bottom: 1px solid #555555; padding-bottom: 20px; }
-      .server-item:last-child { border-bottom: none; }
-      .server-header { display: flex; align-items: center; gap: 10px; font-size: 1.2em; font-weight: bold; color: #ffffff; margin-bottom: 8px; }
-      .server-index { color: #fbbf24; }
-      .server-players { margin-left: auto; }
-      .server-details { display: flex; flex-wrap: wrap; gap: 20px; font-size: 0.9em; color: #aaaaaa; position: relative; }
-      .server-details span { white-space: nowrap; }
-      .server-details .server-ping {position: absolute;right: 0;font-size: 24px;}
-      .error .server-name { color: #c03f36; }
-      .error-msg { color: #c03f36; font-size: 1em; }
-    </style></head><body>
-      <div class="corner corner-tl"></div><div class="corner corner-tr"></div><div class="corner corner-bl"></div><div class="corner corner-br"></div>
-      <div class="title">[服务器状态批量查询]</div>
-      <div class="stats"><span>查询时间: ${new Date().toLocaleString('zh-CN')}</span><span>耗时: ${utils.formatTime(queryTime)} | 成功: ${successful}/${results.length}</span></div>
-      <div class="divider"></div>
-      ${serversHTML}
-      <div class="timestamp">📋 输入 \`cs 服务器地址\` 查询单个服务器</div>
-    </body></html>`
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${getBaseCSS()}.server-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.subtitle{margin:8px 0 0;font-size:clamp(0.95rem,1.65vw,1.12rem);line-height:1.55;color:var(--ink-dim);max-width:760px}.error-msg{color:rgba(255,107,107,0.95);margin:10px 0 8px;font-size:clamp(0.9rem,1.4vw,1rem);letter-spacing:0.02em;word-break:break-all}}</style></head><body><div class="atmosphere"aria-hidden="true"></div><main class="shell"><header class="hero"><p class="eyebrow">SERVER DIRECTORY</p><div class="hero-title-wrap"><div class="brand-stack"><h1>服务器列表</h1></div></div><p class="subtitle">查询耗时：${utils.formatTime(queryTime)}|成功：${successful}/${results.length}</p></header><section class="server-grid">${serversHTML}</section><footer class="site-footer"aria-label="社区信息"><p class="footer-note">查询时间：${new Date().toLocaleString()}</p><p>📋输入\`cs服务器地址\`查询单个服务器</p></footer></main></body></html>`
   }
 
   // 生成批量查询服务器列表 HTML

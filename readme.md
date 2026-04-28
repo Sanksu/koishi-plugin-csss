@@ -121,7 +121,7 @@ csss -c                         #清空数据库中的服务器列表
 无玩家时：
 
 ```html
-<div class="player-row" style="color: #aaaaaa;">服务器当前无玩家在线</div>
+<div class="player-row"">服务器当前无玩家在线</div>
 ```
 
 有玩家时（玩家数超过 10 人会自动分为两列显示，通过 display: flex 布局）：
@@ -130,7 +130,7 @@ csss -c                         #清空数据库中的服务器列表
 <div class="player-row">Player1</div>
 <div class="player-row">Player2</div>
 <!-- 超过 maxPlayers 时追加 -->
-<div class="player-row" style="color: #aaaaaa; font-style: italic;">... 还有 N 位玩家未显示</div>
+<div class="player-row">... 还有 N 位玩家未显示</div>
 ```
 
 
