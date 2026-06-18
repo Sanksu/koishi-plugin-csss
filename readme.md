@@ -121,7 +121,7 @@ csss -c                         #清空数据库中的服务器列表
 无玩家时：
 
 ```html
-<div class="player-row"">服务器当前无玩家在线</div>
+<div class="player-row">服务器当前无玩家在线</div>
 ```
 
 有玩家时（玩家数超过 10 人会自动分为两列显示，通过 display: flex 布局）：
@@ -180,86 +180,93 @@ csss -c                         #清空数据库中的服务器列表
 </div>
 ```
 
-### 默认HTML模板结构参考
+### 默认 HTML 模板结构参考
 
-### 单个服务器查询 (cs)
+以下为当前版本默认模板的实际 HTML 结构，可供自定义时参考。
+
+#### 单个服务器查询 (`cs`)
 
 ```html
 <body>
-  <div class="corner corner-tl"></div>
-  <div class="corner corner-tr"></div>
-  <div class="corner corner-bl"></div>
-  <div class="corner corner-br"></div>
-  
-  <div class="title">[服务器状态查询]</div>
-  <div class="server-name">服务器名称</div>
-  <div class="divider"></div>
-  
-  <div class="info-row">
-    <span>地图: de_dust2</span>
-    <span>IP: 127.0.0.1:27015</span>
-  </div>
-  <div class="info-row">
-    <span style="color: #4CAF50;">人数: 12/32</span>
-    <span style="color: #4CAF50;">Ping: 45ms</span>
-  </div>
-  
-  <div class="player-section">
-    <div class="player-section-title">在线玩家</div>
-    <div class="divider" style="margin: 5px 0 15px;"></div>
-    <!-- 玩家列表 -->
-    <div class="player-row">玩家名1</div>
-    <div class="player-row">玩家名2</div>
-    ...
-  </div>
-  
-  <div class="timestamp">查询时间: 2024/1/1 12:00:00</div>
+  <div class="atmosphere" aria-hidden="true"></div>
+  <main class="shell">
+    <header class="hero">
+      <p class="eyebrow">SERVER STATUS</p>
+      <h1>服务器状态</h1>
+    </header>
+    <section class="server-grid">
+      <div class="server-item">
+        <div class="server-header">
+          <span class="server-name">服务器名称</span>
+          <span class="server-players" style="color: #4CAF50;">18/24</span>
+        </div>
+        <div class="server-details">
+          <span class="server-addr">IP: 127.0.0.1</span>
+        </div>
+        <div class="server-details">
+          <span class="server-map">地图: de_mirage</span>
+          <span class="server-ping" style="color: #4CAF50;">延迟: 32ms</span>
+        </div>
+        <div class="border"></div>
+        <!-- 玩家列表（由 {{PLAYERS_LIST}} 占位符生成） -->
+        <div class="player-row">Player1</div>
+        <div class="player-row">Player2</div>
+        ...
+      </div>
+    </section>
+    <footer class="site-footer">
+      <p>查询时间：2026/6/18 13:33:37</p>
+    </footer>
+  </main>
 </body>
 ```
 
-### 批量服务器查询 (csss)
+#### 批量服务器查询 (`csss`)
 
 ```html
 <body>
-  <div class="corner corner-tl"></div>
-  <!-- ... 其余三角 ... -->
-  <div class="title">[服务器状态批量查询]</div>
-  <div class="stats">
-    <span>查询时间: ...</span>
-    <span>耗时: 2.1秒 | 成功: 3/5</span>
-  </div>
-  <div class="divider"></div>
-  <div class="server-item">
-    <div class="server-header">
-      <span class="server-index">1.</span>
-      <span class="server-name">服务器A</span>
-      <span class="server-players" style="color: #4CAF50;">12/32</span>
-    </div>
-    <div class="server-details">
-      <span class="server-addr">127.0.0.1:27015</span>
-      <span class="server-ping" style="color: #4CAF50;">延迟: 45ms</span>
-    </div>
-    <div class="server-details">
-      <span class="server-map">地图: de_dust2</span>
-    </div>
-  </div>
-  <!-- 失败条目 -->
-  <div class="server-item error">
-    <div class="server-header">
-      <span class="server-index">2.</span>
-      <span class="server-name">192.168.1.1:27016</span>
-      <span class="server-status">❌ 查询失败</span>
-    </div>
-    <div class="server-details error-msg">连接超时</div>
-  </div>
-  <div class="timestamp">📋 输入 `cs 服务器地址` 查询单个服务器</div>
+  <div class="atmosphere" aria-hidden="true"></div>
+  <main class="shell">
+    <header class="hero">
+      <p class="eyebrow">SERVER DIRECTORY</p>
+      <h1>服务器列表</h1>
+      <p class="subtitle">查询耗时：1.2秒 | 成功：4/6</p>
+    </header>
+    <section class="server-grid">
+      <!-- 成功的服务器条目 -->
+      <div class="server-item">
+        <div class="server-header">
+          <span class="server-index">1.</span>
+          <span class="server-name">服务器A</span>
+          <span class="server-players" style="color: #4CAF50;">12/32</span>
+        </div>
+        <div class="server-details"><span class="server-addr">127.0.0.1:27015</span></div>
+        <div class="server-details"><span class="server-map">地图: de_dust2</span><span class="server-ping" style="color: #4CAF50;">延迟: 45ms</span></div>
+      </div>
+      <!-- 失败的服务器条目 -->
+      <div class="server-item error">
+        <div class="server-header">
+          <span class="server-index">2.</span>
+          <span class="server-name">192.168.1.1:27016</span>
+          <span class="server-status">❌ 查询失败</span>
+        </div>
+        <div class="server-details error-msg">连接超时</div>
+      </div>
+    </section>
+    <footer class="site-footer">
+      <p>查询时间：2026/6/18 13:33:37</p>
+      <p>📋 输入 `cs 服务器地址` 查询单个服务器</p>
+    </footer>
+  </main>
 </body>
 ```
 
 ### 注意事项
 
-- 使用`!important`：默认样式通常带有较高优先级，自定义时建议加`!important`确保覆盖。
+- 使用 `!important`：默认样式通常带有较高优先级，自定义时建议加 `!important` 确保覆盖。
 
-- 字体支持：请确保运行环境已安装您指定的字体，否则将回退到默认等宽字体。
+- 字体支持：请确保运行环境已安装您指定的字体，否则将回退到默认字体。
 
 - 图片尺寸：`imageWidth` 和 `imageHeight` 在配置中设定，但可通过 CSS 覆盖 `body` 的 `width` 和 `min-height`。
+
+- 缓存限制：内存缓存最多保留 10 条记录，超出时自动淘汰最旧或已过期的条目。

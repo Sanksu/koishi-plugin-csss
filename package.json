@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-csss",
   "description": "一个用于 Koishi 的 CS:GO / CS2 服务器状态查询插件，支持单个/批量查询、服务器列表管理，并可将结果渲染为图片",
-  "version": "4.1.3",
+  "version": "4.1.4",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [

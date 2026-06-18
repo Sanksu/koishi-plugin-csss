@@ -12,7 +12,7 @@ export interface Config {
   retryCount: number
   generateImage: boolean
   imageWidth: number
-  imageHeight: number             // 注：实际作为 min-height 使用
+  imageHeight: number     // 注：实际作为 min-height 使用
   customHTML: string      // 自定义单个服务器 HTML 模板
   customBatchHTML: string // 自定义批量查询 HTML 模板
 }
@@ -45,6 +45,24 @@ interface BatchQueryResult { results: SingleQueryResult[]; queryTime: number; se
 const CLEAN_NAME_REGEX = /^\d+|[\u0000-\u001F]/g
 const ESCAPE_HTML_REGEX = /[&<>"']/g
 const ESCAPE_MAP: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
+
+// 危险标签：可执行脚本/外部资源的标签
+const DANGEROUS_TAG_REGEX = /<\/?(script|iframe|object|embed|applet|meta|link|base|form|input|textarea|button|select)[^>]*>/gi
+
+// 事件处理器属性 on*=
+const EVENT_HANDLER_REGEX = /\s+on\w+\s*=\s*["'][^"']*["']/gi
+
+// javascript: / data: 协议
+const DANGEROUS_HREF_REGEX = /(href|src|action)\s*=\s*["'](?:javascript|data|vbscript):[^"']*["']/gi
+
+// 过滤用户自定义模板中的危险内容
+function sanitizeCustomTemplate(template: string): string {
+  if (!template) return template
+  return template
+    .replace(DANGEROUS_TAG_REGEX, '')
+    .replace(EVENT_HANDLER_REGEX, '')
+    .replace(DANGEROUS_HREF_REGEX, '$1=""')
+}
 
 // 工具函数
 const utils = {
@@ -86,7 +104,7 @@ const utils = {
     return len
   },
   padEndVisual(str: string, targetLen: number): string {
-    const currentLen = this.getVisualLength(str)
+    const currentLen = utils.getVisualLength(str)
     if (currentLen >= targetLen) return str
     return str + ' '.repeat(targetLen - currentLen)
   }
@@ -100,6 +118,22 @@ declare module 'koishi' {
 
 export function apply(ctx: Context, config: Config) {
   const cache = new Map<string, CacheEntry>()
+  const MAX_CACHE_SIZE = 10
+
+  function evictCache() {
+    if (cache.size <= MAX_CACHE_SIZE) return
+    const now = Date.now()
+    // 先清理过期条目
+    for (const [key, entry] of cache) {
+      if (now - entry.timestamp >= config.cacheTime) cache.delete(key)
+    }
+    // 若仍超限，按插入顺序删除最旧条目（Map 保持插入顺序）
+    let count = cache.size - MAX_CACHE_SIZE
+    for (const key of cache.keys()) {
+      if (count-- <= 0) break
+      cache.delete(key)
+    }
+  }
   const logger = ctx.logger('csss')
 
   if (!ctx.gamedig) { logger.error('需要安装并启用 koishi-plugin-gamedig 插件'); return }
@@ -125,7 +159,7 @@ export function apply(ctx: Context, config: Config) {
       await ctx.database.create('csss_server', { address })
       return true
     } catch (error) {
-      if ((error as Error).message.includes('UNIQUE')) return false
+      if (error instanceof Error && error.message.includes('UNIQUE')) return false
       throw error
     }
   }
@@ -191,6 +225,7 @@ export function apply(ctx: Context, config: Config) {
         const data: ServerQueryData = { game: 'csgo', result: result as GamedigResult }
 
         if (config.cacheTime > 0) {
+          evictCache()
           cache.set(cacheKey, { timestamp: now, data })
         }
         return data
@@ -199,7 +234,7 @@ export function apply(ctx: Context, config: Config) {
         if (i < config.retryCount) await new Promise(resolve => setTimeout(resolve, 1000))
       }
     }
-    throw new Error(`无法连接到服务器 ${lastError instanceof Error ? lastError.message : '未知错误'}`)
+    throw new Error(`无法连接到服务器 ${lastError instanceof Error ? lastError.message : String(lastError)}`, { cause: lastError })
   }
 
   async function queryServers(serversToQuery: string[]): Promise<BatchQueryResult> {
@@ -211,7 +246,7 @@ export function apply(ctx: Context, config: Config) {
           const data = await queryServer(host, port)
           return { index: index + 1, server, success: true, data } as SingleQueryResult
         } catch (error) {
-          return { index: index + 1, server, success: false, error: (error as Error).message } as SingleQueryResult
+          return { index: index + 1, server, success: false, error: error instanceof Error ? error.message : String(error) } as SingleQueryResult
         }
       })
     )
@@ -304,6 +339,7 @@ export function apply(ctx: Context, config: Config) {
 
   // 使用自定义模板渲染单个服务器 HTML
   function renderCustomServerHTML(data: ServerQueryData, host: string, port: number, template: string): string {
+    const safeTemplate = sanitizeCustomTemplate(template)
     const r = data.result
     const playersListHTML = buildPlayersListHTML(r.players)
     const replacements: Record<string, string> = {
@@ -318,7 +354,7 @@ export function apply(ctx: Context, config: Config) {
       '{{PLAYERS_LIST}}': playersListHTML,
       '{{TIMESTAMP}}': new Date().toLocaleString('zh-CN'),
     }
-    let html = template
+    let html = safeTemplate
     for (const [placeholder, value] of Object.entries(replacements)) {
       html = html.split(placeholder).join(value)
     }
@@ -365,6 +401,7 @@ export function apply(ctx: Context, config: Config) {
   }
 
   function renderCustomBatchHTML(results: SingleQueryResult[], serversToQuery: string[], queryTime: number, template: string): string {
+    const safeTemplate = sanitizeCustomTemplate(template)
     const successful = results.filter(r => r.success).length
     const serversListHTML = buildServersListHTML(results, serversToQuery)
     const replacements: Record<string, string> = {
@@ -374,7 +411,7 @@ export function apply(ctx: Context, config: Config) {
       '{{SERVERS_LIST}}': serversListHTML,
       '{{TIMESTAMP}}': new Date().toLocaleString('zh-CN'),
     }
-    let html = template
+    let html = safeTemplate
     for (const [placeholder, value] of Object.entries(replacements)) {
       html = html.split(placeholder).join(value)
     }
@@ -423,9 +460,9 @@ export function apply(ctx: Context, config: Config) {
         }
         return `${formatServerInfo(data)}\n\n${formatPlayers(data.result.players)}`
       } catch (error) {
-        const err = error as Error
-        let msg = `查询失败: ${err.message}\n\n`
-        if (err.message.includes('无效的地址格式')) msg += '地址格式应为 地址:端口，默认端口27015'
+        const errMsg = error instanceof Error ? error.message : String(error)
+        let msg = `查询失败: ${errMsg}\n\n`
+        if (errMsg.includes('无效的地址格式')) msg += '地址格式应为 地址:端口，默认端口27015'
         else msg += '请检查地址、防火墙及服务器类型'
         return msg
       }
@@ -465,7 +502,7 @@ export function apply(ctx: Context, config: Config) {
           const added = await addServer(options.add)
           if (!added) return `⚠️ 服务器 ${options.add} 已存在于列表中`
           return `✅ 已添加服务器 ${options.add}\n当前列表 ${(await getServerList()).length} 个服务器`
-        } catch (error) { return `❌ 添加失败: ${(error as Error).message}` }
+        } catch (error) { return `❌ 添加失败: ${error instanceof Error ? error.message : String(error)}` }
       }
       if (options?.remove !== undefined) {
         const index = options.remove
@@ -505,7 +542,7 @@ export function apply(ctx: Context, config: Config) {
           }
         }
         return generateTextTable(results, serversToQuery, queryTime) + '\n📋 输入 `cs 服务器地址` 查询单个服务器'
-      } catch (error) { return `❌ 批量查询失败: ${(error as Error).message}` }
+      } catch (error) { return `❌ 批量查询失败: ${error instanceof Error ? error.message : String(error)}` }
     })
 
   ctx.on('dispose', () => cache.clear())
