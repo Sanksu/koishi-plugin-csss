@@ -15,19 +15,29 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v4
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-          
+
+      - name: Enable Corepack
+        run: corepack enable
+
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
-        
+        run: yarn install --immutable
+
       - name: Build
         run: yarn build
-        
-      - name: Publish
+
+      - name: Verify build output
+        run: |
+          if [ ! -d "lib" ] || [ ! -d "dist" ]; then
+            echo "ERROR: Build output directories (lib/dist) are missing"
+            exit 1
+          fi
+
+      - name: Publish to npm (OIDC)
         run: npm publish --provenance
 
