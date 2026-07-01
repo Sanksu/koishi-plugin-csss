@@ -33,8 +33,8 @@ jobs:
 
       - name: Verify build output
         run: |
-          if [ ! -d "lib" ] || [ ! -d "dist" ]; then
-            echo "ERROR: Build output directories (lib/dist) are missing"
+          if [ ! -f "lib/index.js" ]; then
+            echo "ERROR: Build output (lib/index.js) is missing"
             exit 1
           fi
 
