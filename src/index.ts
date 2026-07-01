@@ -68,10 +68,7 @@ function sanitizeCustomTemplate(template: string): string {
 const utils = {
   formatPing(ping: number): string {
     if (!ping || ping <= 0) return '未知'
-    if (ping < 50) return `🟢 ${ping}ms`
-    if (ping < 100) return `🟡 ${ping}ms`
-    if (ping < 200) return `🟠 ${ping}ms`
-    return `🔴 ${ping}ms`
+    return `${ping}ms`
   },
   cleanName(name: string): string {
     return name ? name.replace(CLEAN_NAME_REGEX, '').trim() : '未知'
@@ -225,8 +222,8 @@ export function apply(ctx: Context, config: Config) {
         const data: ServerQueryData = { game: 'csgo', result: result as GamedigResult }
 
         if (config.cacheTime > 0) {
-          evictCache()
           cache.set(cacheKey, { timestamp: now, data })
+          evictCache()
         }
         return data
       } catch (error) {
@@ -260,7 +257,7 @@ export function apply(ctx: Context, config: Config) {
 
   function generateTextTable(results: SingleQueryResult[], serversToQuery: string[], queryTime: number, title: string = '批量查询结果'): string {
     const successful = results.filter(r => r.success).length
-    let message = `📊 ${title} (${utils.formatTime(queryTime)})\n✅ 成功 ${successful} 个 ❌ 失败 ${results.length - successful} 个\n\n`
+    let message = `${title} (${utils.formatTime(queryTime)})\n成功 ${successful} 个 失败 ${results.length - successful} 个\n\n`
 
     results.forEach((result, idx) => {
       const num = (idx + 1).toString().padStart(2, ' ')
@@ -271,7 +268,7 @@ export function apply(ctx: Context, config: Config) {
         const paddedName = utils.padEndVisual(truncated, 24)
         message += `${num} ${paddedName} ${d.players.length}/${d.maxplayers}\n`
       } else {
-        message += `${num} ${serversToQuery[idx].padEnd(20)} ❌ 查询失败\n`
+        message += `${num} ${serversToQuery[idx].padEnd(20)} 查询失败\n`
       }
     })
     return message
@@ -281,20 +278,20 @@ export function apply(ctx: Context, config: Config) {
     const r = data.result
     const lines = [
       ` Counter-Strike 服务器\n`,
-      r.name ? `🏷️ 名称 ${utils.cleanName(r.name)}` : null,
-      r.map ? `🗺️ 地图 ${r.map}` : null,
-      `👥 玩家 ${r.players.length}/${r.maxplayers}${r.bots.length ? ` (${r.bots.length} Bot)` : ''}`,
-      r.ping ? `📶 Ping ${utils.formatPing(r.ping)}` : null,
-      r.connect ? `🔗 连接 ${r.connect}` : `📍 地址 ${r.host || '未知'}:${r.port || '未知'}`,
+      r.name ? `名称 ${utils.cleanName(r.name)}` : null,
+      r.map ? `地图 ${r.map}` : null,
+      `玩家 ${r.players.length}/${r.maxplayers}${r.bots.length ? ` (${r.bots.length} Bot)` : ''}`,
+      r.ping ? `Ping ${utils.formatPing(r.ping)}` : null,
+      r.connect ? `连接 ${r.connect}` : `地址 ${r.host || '未知'}:${r.port || '未知'}`,
     ]
     return lines.filter(Boolean).join('\n')
   }
 
   function formatPlayers(players: GamedigPlayer[]): string {
-    if (!players.length) return '👤 服务器当前无在线玩家'
+    if (!players.length) return '服务器当前无在线玩家'
     const sorted = [...players].sort((a, b) => utils.cleanName(a.name).localeCompare(utils.cleanName(b.name)))
     const display = sorted.slice(0, config.maxPlayers)
-    let msg = `👤 在线玩家 (${players.length}人)\n`
+    let msg = `在线玩家 (${players.length}人)\n`
     display.forEach((p, i) => msg += `${i + 1}. ${utils.cleanName(p.name)}\n`)
     if (players.length > config.maxPlayers) msg += `... 还有 ${players.length - config.maxPlayers} 位玩家未显示`
     return msg.trim()
@@ -364,22 +361,9 @@ export function apply(ctx: Context, config: Config) {
   // 生成批量查询默认 HTML
   function generateDefaultBatchHTML(results: SingleQueryResult[], serversToQuery: string[], queryTime: number): string {
     const successful = results.filter(r => r.success).length
-    let serversHTML = results.map((result, index) => {
-      if (result.success && result.data) {
-        const d = result.data.result
-        return `<div class="server-item">
-          <div class="server-header"><span class="server-index">${index + 1}.</span><span class="server-name">${utils.escapeHtml(utils.cleanName(d.name || '未知'))}</span><span class="server-players" style="color: ${utils.getPlayerColor(d.players.length)};">${d.players.length}/${d.maxplayers}</span></div>
-          <div class="server-details"><span class="server-addr">${utils.escapeHtml(serversToQuery[index])}</span></div>
-          <div class="server-details"><span class="server-map">地图: ${utils.escapeHtml(d.map || '')}</span><span class="server-ping" style="color: ${utils.getPingColor(d.ping)};">延迟: ${d.ping}ms</span></div>
-        </div>`
-      }
-      return `<div class="server-item error">
-        <div class="server-header"><span class="server-index">${index + 1}.</span><span class="server-name">${utils.escapeHtml(serversToQuery[index])}</span><span class="server-status">❌ 查询失败</span></div>
-        <div class="server-details error-msg">${utils.escapeHtml(result.error || '未知错误')}</div>
-      </div>`
-    }).join('')
+    const serversHTML = buildServersListHTML(results, serversToQuery)
 
-    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${getBaseCSS()}.server-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.subtitle{margin:8px 0 0;font-size:clamp(0.95rem,1.65vw,1.12rem);line-height:1.55;color:var(--ink-dim);max-width:760px}.error-msg{color:rgba(255,107,107,0.95);margin:10px 0 8px;font-size:clamp(0.9rem,1.4vw,1rem);letter-spacing:0.02em;word-break:break-all}}</style></head><body><div class="atmosphere"aria-hidden="true"></div><main class="shell"><header class="hero"><p class="eyebrow">SERVER DIRECTORY</p><div class="hero-title-wrap"><div class="brand-stack"><h1>服务器列表</h1></div></div><p class="subtitle">查询耗时：${utils.formatTime(queryTime)}|成功：${successful}/${results.length}</p></header><section class="server-grid">${serversHTML}</section><footer class="site-footer"aria-label="社区信息"><p class="footer-note">查询时间：${new Date().toLocaleString()}</p><p>📋输入\`cs服务器地址\`查询单个服务器</p></footer></main></body></html>`
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${getBaseCSS()}.server-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.subtitle{margin:8px 0 0;font-size:clamp(0.95rem,1.65vw,1.12rem);line-height:1.55;color:var(--ink-dim);max-width:760px}.error-msg{color:rgba(255,107,107,0.95);margin:10px 0 8px;font-size:clamp(0.9rem,1.4vw,1rem);letter-spacing:0.02em;word-break:break-all}}</style></head><body><div class="atmosphere"aria-hidden="true"></div><main class="shell"><header class="hero"><p class="eyebrow">SERVER DIRECTORY</p><div class="hero-title-wrap"><div class="brand-stack"><h1>服务器列表</h1></div></div><p class="subtitle">查询耗时：${utils.formatTime(queryTime)}|成功：${successful}/${results.length}</p></header><section class="server-grid">${serversHTML}</section><footer class="site-footer"aria-label="社区信息"><p class="footer-note">查询时间：${new Date().toLocaleString()}</p><p>输入\`cs服务器地址\`查询单个服务器</p></footer></main></body></html>`
   }
 
   // 生成批量查询服务器列表 HTML
@@ -394,7 +378,7 @@ export function apply(ctx: Context, config: Config) {
         </div>`
       }
       return `<div class="server-item error">
-        <div class="server-header"><span class="server-index">${index + 1}.</span><span class="server-name">${utils.escapeHtml(serversToQuery[index])}</span><span class="server-status">❌ 查询失败</span></div>
+        <div class="server-header"><span class="server-index">${index + 1}.</span><span class="server-name">${utils.escapeHtml(serversToQuery[index])}</span><span class="server-status">查询失败</span></div>
         <div class="server-details error-msg">${utils.escapeHtml(result.error || '未知错误')}</div>
       </div>`
     }).join('')
@@ -470,16 +454,22 @@ export function apply(ctx: Context, config: Config) {
 
   ctx.command('cs.status', '检查插件状态和配置')
     .action(async () => {
-      const gamedigStatus = ctx.gamedig ? '✅ 可用' : '❌ 不可用'
-      let puppeteerStatus = '❌ 不可用'
+      const gamedigStatus = ctx.gamedig ? '可用' : '不可用'
+      let puppeteerStatus = '不可用'
       if (ctx.puppeteer) {
-        try { const page = await ctx.puppeteer.page(); await page.setContent('<div>test</div>'); await page.close(); puppeteerStatus = '✅ 可用' } catch (e) { puppeteerStatus = `❌ 不可用` }
+        let page
+        try {
+          page = await ctx.puppeteer.page()
+          await page.setContent('<div>test</div>')
+          puppeteerStatus = '可用'
+        } catch { puppeteerStatus = '不可用' }
+        finally { await page?.close().catch(() => { }) }
       }
-      return `✅ CS服务器查询插件状态\n💾 缓存数量: ${cache.size}\n🗄️ 数据库服务器数量: ${(await getServerList()).length}\n🕹️ Gamedig: ${gamedigStatus}\n🖼️ Puppeteer: ${puppeteerStatus}\n⚙️ 配置: 超时=${config.timeout}ms 缓存=${config.cacheTime}ms 重试=${config.retryCount} 最大玩家=${config.maxPlayers} 图片=${config.generateImage ? '是' : '否'}`
+      return `CS服务器查询插件状态\n缓存数量: ${cache.size}\n数据库服务器数量: ${(await getServerList()).length}\nGamedig: ${gamedigStatus}\nPuppeteer: ${puppeteerStatus}\n配置: 超时=${config.timeout}ms 缓存=${config.cacheTime}ms 重试=${config.retryCount} 最大玩家=${config.maxPlayers} 图片=${config.generateImage ? '是' : '否'}`
     })
 
   ctx.command('cs.help', '查看帮助')
-    .action(() => `🔫 CS服务器查询插件帮助\n\n📝 单服查询: cs [地址:端口]\n选项: -i 图片, -t 文本, -c 清除缓存\n\n🎯 批量查询: csss [地址1 地址2 ...]  (不指定地址则查询数据库列表)\n管理命令:\ncsss -l                查看数据库列表\ncsss -a <地址:端口>    添加服务器\ncsss -r <序号>         移除服务器\ncsss -c                清空数据库列表\n\n📋 状态: cs.status\n💡 默认端口27015，支持IPv6 (如 [::1]:27015)`)
+    .action(() => `CS服务器查询插件帮助\n\n单服查询: cs [地址:端口]\n选项: -i 图片, -t 文本, -c 清除缓存\n\n批量查询: csss [地址1 地址2 ...]  (不指定地址则查询数据库列表)\n管理命令:\ncsss -l                查看数据库列表\ncsss -a <地址:端口>    添加服务器\ncsss -r <序号>         移除服务器\ncsss -c                清空数据库列表\n\n状态: cs.status\n默认端口27015，支持IPv6 (如 [::1]:27015)`)
 
   ctx.command('csss', '批量查询服务器状态')
     .alias('批量查询')
@@ -492,36 +482,36 @@ export function apply(ctx: Context, config: Config) {
     .action(async ({ session, options }, ...addresses) => {
       if (options?.list) {
         const list = await getServerList()
-        if (!list.length) return '📋 服务器列表为空，请使用 csss -a 地址:端口 添加'
-        return '📋 数据库中的服务器列表\n' + list.map((s, i) => `${i + 1}. ${s}`).join('\n')
+        if (!list.length) return '服务器列表为空，请使用 csss -a 地址:端口 添加'
+        return '数据库中的服务器列表\n' + list.map((s, i) => `${i + 1}. ${s}`).join('\n')
       }
       if (options?.add !== undefined) {
-        if (typeof options.add !== 'string' || !options.add.trim()) return '❌ 请提供要添加的服务器地址\n正确用法：csss -a 127.0.0.1:27015'
+        if (typeof options.add !== 'string' || !options.add.trim()) return '请提供要添加的服务器地址\n正确用法：csss -a 127.0.0.1:27015'
         try {
           parseAddress(options.add)
           const added = await addServer(options.add)
-          if (!added) return `⚠️ 服务器 ${options.add} 已存在于列表中`
-          return `✅ 已添加服务器 ${options.add}\n当前列表 ${(await getServerList()).length} 个服务器`
-        } catch (error) { return `❌ 添加失败: ${error instanceof Error ? error.message : String(error)}` }
+          if (!added) return `服务器 ${options.add} 已存在于列表中`
+          return `已添加服务器 ${options.add}\n当前列表 ${(await getServerList()).length} 个服务器`
+        } catch (error) { return `添加失败: ${error instanceof Error ? error.message : String(error)}` }
       }
       if (options?.remove !== undefined) {
         const index = options.remove
         if (typeof index !== 'number' || !Number.isInteger(index) || index < 1) {
-          return '❌ 请提供有效的服务器序号（正整数）'
+          return '请提供有效的服务器序号（正整数）'
         }
         const success = await removeServerByIndex(options.remove)
-        if (success) return `✅ 已移除序号 ${options.remove}\n当前列表 ${(await getServerList()).length} 个服务器`
-        return `❌ 索引无效，请输入 1-${(await getServerList()).length} 之间的数字`
+        if (success) return `已移除序号 ${options.remove}\n当前列表 ${(await getServerList()).length} 个服务器`
+        return `索引无效，请输入 1-${(await getServerList()).length} 之间的数字`
       }
-      if (options?.clear) { return `✅ 已清空服务器列表，共移除 ${await clearServers()} 个服务器` }
+      if (options?.clear) { return `已清空服务器列表，共移除 ${await clearServers()} 个服务器` }
 
       let serversToQuery: string[] = addresses.length > 0 ? addresses as string[] : await getServerList()
-      if (!serversToQuery.length) return '❌ 没有可查询的服务器\n请使用 csss -a 地址:端口 添加服务器\n或使用 csss 地址1 地址2 ... 临时查询'
+      if (!serversToQuery.length) return '没有可查询的服务器\n请使用 csss -a 地址:端口 添加服务器\n或使用 csss 地址1 地址2 ... 临时查询'
 
       const maxServers = 10
       if (serversToQuery.length > maxServers) {
         serversToQuery = serversToQuery.slice(0, maxServers)
-        if (session) session.send(`⚠️ 服务器数量超过限制，仅查询前 ${maxServers} 个`)
+        if (session) session.send(`服务器数量超过限制，仅查询前 ${maxServers} 个`)
       }
 
       try {
@@ -541,8 +531,8 @@ export function apply(ctx: Context, config: Config) {
             logger.error('生成批量查询图片失败', imgErr)
           }
         }
-        return generateTextTable(results, serversToQuery, queryTime) + '\n📋 输入 `cs 服务器地址` 查询单个服务器'
-      } catch (error) { return `❌ 批量查询失败: ${error instanceof Error ? error.message : String(error)}` }
+        return generateTextTable(results, serversToQuery, queryTime) + '\n输入 `cs 服务器地址` 查询单个服务器'
+      } catch (error) { return `批量查询失败: ${error instanceof Error ? error.message : String(error)}` }
     })
 
   ctx.on('dispose', () => cache.clear())
